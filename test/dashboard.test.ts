@@ -99,10 +99,16 @@ describe("repeats pages", () => {
 		const category = uniqueCategory();
 		await ledger.claim(userId, { category, name: "Euler's Identity", force: false });
 		await ledger.claim(userId, { category, name: "EULER IDENTITY", force: false });
+		await ledger.claim(userId, { category, name: "Srinivasa Ramanujan", force: false });
+		await ledger.claim(userId, { category, name: "Srinivasa Ramanujam", force: false });
 
 		const repeats = await (await get("/repeats", cookie)).text();
 		expect(repeats).toContain("Euler&#39;s Identity");
 		expect(repeats).toContain("EULER IDENTITY");
+		expect(repeats).toContain("<details");
+		expect(repeats).toContain("exact");
+		expect(repeats).toContain("trigram");
+		expect(repeats).toContain("1.00");
 
 		const global = await get("/global", cookie);
 		expect(global.status).toBe(200);

@@ -100,7 +100,7 @@ export class Ledger {
 				display_name: row.entry.display_name,
 				category: row.entry.category,
 				hit_count: row.entry.hit_count,
-				recent_phrasings: row.phrasings,
+				recent_phrasings: row.hits.map((hit) => hit.candidate_text),
 			})),
 		};
 	}

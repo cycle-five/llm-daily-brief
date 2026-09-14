@@ -10,7 +10,7 @@ import { LedgerError } from "../core/errors";
 import type { TokenRow } from "../core/rows";
 import { toIso } from "../core/wire";
 import { ledgerFromEnv } from "../services";
-import { LedgerStore } from "../store/d1";
+import { LedgerStore, type UserRepeatRow } from "../store/d1";
 import { isSameOrigin, sessionUserId, type WebDeps, type WebEnv } from "./guards";
 import { ErrorPage, Layout, render } from "./layout";
 import { BRIEF_PROMPT_SNIPPET } from "./prompt";
@@ -97,13 +97,65 @@ function LedgerPage(props: { entries: Entry[] }) {
 	);
 }
 
-function RepeatsPage(props: { title: string; repeats: RepeatStat[]; minUsers?: number }) {
+function MyRepeatsPage(props: { rows: UserRepeatRow[] }) {
 	return (
-		<Layout title={props.title} signedIn>
-			<h1>{props.title}</h1>
-			{props.minUsers !== undefined ? (
-				<p>Topics appear here once at least {props.minUsers} people have tried to repeat them.</p>
-			) : null}
+		<Layout title="Your repeats" signedIn>
+			<h1>Your repeats</h1>
+			{props.rows.length === 0 ? (
+				<p>No repeats yet.</p>
+			) : (
+				<table>
+					<thead>
+						<tr>
+							<th>Topic</th>
+							<th>Category</th>
+							<th>Hits</th>
+							<th />
+						</tr>
+					</thead>
+					<tbody>
+						{props.rows.map((row) => (
+							<tr>
+								<td>{row.entry.display_name}</td>
+								<td>{row.entry.category}</td>
+								<td>{row.entry.hit_count}</td>
+								<td>
+									<details>
+										<summary>{row.hits.length} blocked attempts</summary>
+										<table>
+											<thead>
+												<tr>
+													<th>Phrasing</th>
+													<th>Match</th>
+													<th>Score</th>
+												</tr>
+											</thead>
+											<tbody>
+												{row.hits.map((hit) => (
+													<tr>
+														<td>{hit.candidate_text}</td>
+														<td>{hit.match_kind}</td>
+														<td>{hit.score.toFixed(2)}</td>
+													</tr>
+												))}
+											</tbody>
+										</table>
+									</details>
+								</td>
+							</tr>
+						))}
+					</tbody>
+				</table>
+			)}
+		</Layout>
+	);
+}
+
+function GlobalRepeatsPage(props: { repeats: RepeatStat[]; minUsers: number }) {
+	return (
+		<Layout title="Global repeats" signedIn>
+			<h1>Global repeats</h1>
+			<p>Topics appear here once at least {props.minUsers} people have tried to repeat them.</p>
 			{props.repeats.length === 0 ? (
 				<p>No repeats yet.</p>
 			) : (
@@ -113,7 +165,7 @@ function RepeatsPage(props: { title: string; repeats: RepeatStat[]; minUsers?: n
 							<th>Topic</th>
 							<th>Category</th>
 							<th>Hits</th>
-							<th>{props.minUsers !== undefined ? "People" : "Blocked phrasings"}</th>
+							<th>People</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -122,17 +174,7 @@ function RepeatsPage(props: { title: string; repeats: RepeatStat[]; minUsers?: n
 								<td>{repeat.display_name}</td>
 								<td>{repeat.category}</td>
 								<td>{repeat.hit_count}</td>
-								<td>
-									{repeat.distinct_users !== undefined ? (
-										repeat.distinct_users
-									) : (
-										<ul>
-											{(repeat.recent_phrasings ?? []).map((phrasing) => (
-												<li>{phrasing}</li>
-											))}
-										</ul>
-									)}
-								</td>
+								<td>{repeat.distinct_users}</td>
 							</tr>
 						))}
 					</tbody>
@@ -301,12 +343,8 @@ export function registerDashboardRoutes(app: Hono<WebEnv>, deps: WebDeps): void 
 	app.get(
 		"/repeats",
 		page(async (c, userId) => {
-			const stats = await ledgerFromEnv(c.env).stats(
-				userId,
-				{ scope: "me", limit: PAGE_LIMIT },
-				globalMinUsersFromEnv(c.env),
-			);
-			return render(c, <RepeatsPage title="Your repeats" repeats={stats.repeats} />);
+			const rows = await new LedgerStore(c.env.DB).topRepeatsForUser(userId, undefined, PAGE_LIMIT);
+			return render(c, <MyRepeatsPage rows={rows} />);
 		}),
 	);
 
@@ -319,10 +357,7 @@ export function registerDashboardRoutes(app: Hono<WebEnv>, deps: WebDeps): void 
 				{ scope: "global", limit: PAGE_LIMIT },
 				minUsers,
 			);
-			return render(
-				c,
-				<RepeatsPage title="Global repeats" repeats={stats.repeats} minUsers={minUsers} />,
-			);
+			return render(c, <GlobalRepeatsPage repeats={stats.repeats} minUsers={minUsers} />);
 		}),
 	);
 

@@ -156,7 +156,9 @@ describe("hits and repeats", () => {
 			[euler.id, 2],
 			[gauss.id, 1],
 		]);
-		expect(repeats[0]?.phrasings).toEqual(["e^(iπ)+1=0", "Euler identity"]);
+		expect(repeats[0]?.hits.map((h) => h.candidate_text)).toEqual(["e^(iπ)+1=0", "Euler identity"]);
+		expect(repeats[0]?.hits[0]?.match_kind).toBe("semantic");
+		expect(repeats[0]?.hits[0]?.score).toBe(0.9);
 	});
 
 	it("caps phrasings per entry at MAX_PHRASINGS", async () => {
@@ -168,8 +170,8 @@ describe("hits and repeats", () => {
 			await store.recordHit(makeHit(entry, `pi ${i}`, { created_at: i }));
 		}
 		const [repeat] = await store.topRepeatsForUser(userId, entry.category, 10);
-		expect(repeat?.phrasings).toHaveLength(10);
-		expect(repeat?.phrasings[0]).toBe("pi 11");
+		expect(repeat?.hits).toHaveLength(10);
+		expect(repeat?.hits[0]?.candidate_text).toBe("pi 11");
 	});
 
 	it("globalRepeats hides topics hit by fewer than minUsers users and picks the most common display name", async () => {

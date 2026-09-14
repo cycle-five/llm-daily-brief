@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MatchKind } from "../api/schemas";
 import { chunk } from "../core/chunk";
 import {
 	type EntryRow,
@@ -27,9 +28,16 @@ const GlobalRepeatRowSchema = z.object({
 });
 export type GlobalRepeatRow = z.infer<typeof GlobalRepeatRowSchema>;
 
+const RepeatHitSchema = z.object({
+	candidate_text: z.string(),
+	match_kind: MatchKind,
+	score: z.number(),
+});
+export type RepeatHit = z.infer<typeof RepeatHitSchema>;
+
 export interface UserRepeatRow {
 	entry: EntryRow;
-	phrasings: string[];
+	hits: RepeatHit[];
 }
 
 export const MAX_PHRASINGS = 10;
@@ -43,7 +51,7 @@ const TOKEN_COLUMNS = "id, user_id, token_hash, label, created_at, last_used_at,
 
 const UserIdRow = z.object({ user_id: z.string() });
 const IdRow = z.object({ id: z.string() });
-const PhrasingRow = z.object({ entry_id: z.string(), candidate_text: z.string() });
+const HitDetailRow = RepeatHitSchema.extend({ entry_id: z.string() });
 
 export function isUniqueViolation(error: unknown): boolean {
 	return error instanceof Error && error.message.includes("UNIQUE constraint failed");
@@ -256,24 +264,30 @@ export class LedgerStore {
 			.bind(userId, category ?? null, limit)
 			.all();
 		const entries = results.map((row) => EntryRowSchema.parse(row));
-		const phrasings = new Map<string, string[]>(entries.map((entry) => [entry.id, []]));
+		const hitsByEntry = new Map<string, RepeatHit[]>(entries.map((entry) => [entry.id, []]));
 		for (const batch of chunk(
 			entries.map((entry) => entry.id),
 			MAX_IN_LIST,
 		)) {
 			const hits = await this.db
 				.prepare(
-					`SELECT entry_id, candidate_text FROM hits WHERE entry_id IN (${placeholders(batch.length, 1)}) ORDER BY created_at DESC`,
+					`SELECT entry_id, candidate_text, match_kind, score FROM hits WHERE entry_id IN (${placeholders(batch.length, 1)}) ORDER BY created_at DESC`,
 				)
 				.bind(...batch)
 				.all();
 			for (const raw of hits.results) {
-				const hit = PhrasingRow.parse(raw);
-				const list = phrasings.get(hit.entry_id);
-				if (list && list.length < MAX_PHRASINGS) list.push(hit.candidate_text);
+				const hit = HitDetailRow.parse(raw);
+				const list = hitsByEntry.get(hit.entry_id);
+				if (list && list.length < MAX_PHRASINGS) {
+					list.push({
+						candidate_text: hit.candidate_text,
+						match_kind: hit.match_kind,
+						score: hit.score,
+					});
+				}
 			}
 		}
-		return entries.map((entry) => ({ entry, phrasings: phrasings.get(entry.id) ?? [] }));
+		return entries.map((entry) => ({ entry, hits: hitsByEntry.get(entry.id) ?? [] }));
 	}
 
 	async globalRepeats(
