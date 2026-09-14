@@ -172,6 +172,50 @@ describe("MCP client authorization via GitHub", () => {
 	});
 });
 
+describe("authorization request errors", () => {
+	it("returns 400 without leaking internals for an unregistered client", async () => {
+		const app = createWebApp({ fetchFn: fakeUpstream(), now: () => Date.now() });
+		const url = new URL(`${ORIGIN}/authorize`);
+		url.search = new URLSearchParams({
+			response_type: "code",
+			client_id: "no-such-client",
+			redirect_uri: CLIENT_REDIRECT,
+			state: "client-state",
+		}).toString();
+		const response = await app.request(url.toString(), {}, webEnv());
+		expect(response.status).toBe(400);
+		const body = await response.text();
+		expect(body).not.toContain("Error:");
+		expect(body).not.toContain("AuthorizationError");
+	});
+
+	it("redirects a request rejected after redirect-URI validation back to the client", async () => {
+		const app = createWebApp({ fetchFn: fakeUpstream(), now: () => Date.now() });
+		const api = getOAuthApi(providerOptions, env);
+		const client = await api.createClient({
+			redirectUris: [CLIENT_REDIRECT],
+			clientName: "Claude",
+			tokenEndpointAuthMethod: "none",
+		});
+		const url = new URL(`${ORIGIN}/authorize`);
+		// A public client without a PKCE code_challenge is rejected only after the
+		// redirect URI has already been validated against the registered client.
+		url.search = new URLSearchParams({
+			response_type: "code",
+			client_id: client.clientId,
+			redirect_uri: CLIENT_REDIRECT,
+			state: "client-state",
+		}).toString();
+		const response = await app.request(url.toString(), {}, webEnv());
+		expect(response.status).toBe(302);
+		const location = new URL(response.headers.get("location") ?? "");
+		expect(`${location.origin}${location.pathname}`).toBe(CLIENT_REDIRECT);
+		expect(location.searchParams.get("error")).toBeTruthy();
+		expect(location.searchParams.get("error_description")).toBeTruthy();
+		expect(location.searchParams.get("state")).toBe("client-state");
+	});
+});
+
 describe("dashboard sign-in via Google", () => {
 	it("redirects to Google, then to /ledger with a session", async () => {
 		const app = createWebApp({ fetchFn: fakeUpstream(), now: () => Date.now() });

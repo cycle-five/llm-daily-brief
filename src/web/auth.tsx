@@ -1,4 +1,4 @@
-import type { AuthRequest } from "@cloudflare/workers-oauth-provider";
+import { AuthorizationError, type AuthRequest } from "@cloudflare/workers-oauth-provider";
 import type { Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { z } from "zod";
@@ -94,9 +94,21 @@ export function registerAuthRoutes(app: Hono<WebEnv>, deps: WebDeps): void {
 		try {
 			request = await c.env.OAUTH_PROVIDER.parseAuthRequest(c.req.raw);
 		} catch (error) {
+			if (!(error instanceof AuthorizationError)) throw error;
+			if (error.redirectUri) {
+				const target = new URL(error.redirectUri);
+				target.searchParams.set("error", error.code);
+				target.searchParams.set("error_description", error.description);
+				if (error.state) target.searchParams.set("state", error.state);
+				if (error.issuer) target.searchParams.set("iss", error.issuer);
+				return c.redirect(target.toString());
+			}
 			return render(
 				c,
-				<ErrorPage title="Invalid authorization request" message={String(error)} />,
+				<ErrorPage
+					title="Invalid authorization request"
+					message={error.description || error.code}
+				/>,
 				400,
 			);
 		}
