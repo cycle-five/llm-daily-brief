@@ -281,7 +281,8 @@ default 20.
 1. Run the pipeline.
 2. If `likely_repeat`:
    - If the best match is **exact**, the result is `repeat` even with
-     `force: true` (the unique index forbids a second identical entry).
+     `force: true` (the unique index forbids a second identical entry), and a
+     hit is recorded as for any other repeat.
    - Otherwise, if `force` is false → in one D1 batch, insert a `hits` row for
      the best match and increment its `hit_count`; return `repeat`.
    - Otherwise (`force: true`) → proceed to step 3 with `forced: true` and
@@ -323,20 +324,19 @@ against D1.
 ### Request routing (`src/index.ts`)
 
 ```
-fetch(request):
-  if path starts with /mcp or /api/v1/
-     and Authorization is "Bearer ldg_…":
-       resolve personal token → userId (401 if unknown or revoked)
-       dispatch to the API router with props { userId }
-  else:
-       OAuthProvider.fetch(request)
-         apiRoute:   ["/mcp", "/api/v1/"]  → API router with props from grant
-         defaultHandler:                    → web app (auth pages + dashboard)
+export default new OAuthProvider({
+  apiRoute:   ["/mcp", "/api/v1/"]     → API router, props in ctx.props
+  apiHandler: API router (dispatches /mcp vs /api/v1/ by path)
+  defaultHandler: web app (auth pages + dashboard)
+  resolveExternalToken({ token, env }):
+    token starts with "ldg_" → look up hash in api_tokens
+      → { props: { userId } }, or null (401) if unknown or revoked
+})
 ```
 
-Personal tokens are handled before the OAuth provider, so the design does not
-depend on the provider supporting external tokens. The API router receives the
-same `Props = { userId: string }` either way.
+`resolveExternalToken` is called by the provider (0.10.3) for any bearer token
+not found in its KV store, so personal tokens and OAuth tokens reach the API
+router identically, with `ctx.props = { userId: string }`.
 
 ### OAuth sign-in (MCP clients such as claude.ai)
 
@@ -361,9 +361,11 @@ same `Props = { userId: string }` either way.
    too and `/authorize` goes straight to step 5.
 
 **Unattended runs:** the scheduled brief runs without a person present, so
-access tokens are short-lived (1 hour) but refresh tokens do not expire until
-the grant is revoked. The plan must confirm this configuration against the
-pinned library version.
+access tokens are short-lived (`accessTokenTTL: 3600`) but refresh tokens do not
+expire until the grant is revoked. In `@cloudflare/workers-oauth-provider`
+0.10.3 the refresh-token default is 30 days; non-expiring requires passing
+`refreshTokenTTL: undefined` **explicitly**. A unit test asserts the option
+object contains the key with value `undefined`.
 
 ### Dashboard sessions
 
@@ -440,11 +442,18 @@ one batch, upsert vectors, mark `indexed`. Failures leave rows `pending`.
 
 ## Testing
 
-- **Runner:** Vitest with `@cloudflare/vitest-plugin` (`cloudflareTest`), local
-  D1 through Miniflare, migrations applied with `readD1Migrations` /
-  `applyD1Migrations` in a setup file.
+- **Runner:** Vitest 4 with `@cloudflare/vitest-plugin` (`cloudflareTest`),
+  local D1 through Miniflare, migrations applied with `readD1Migrations` /
+  `applyD1Migrations` in a setup file. Tests use `wrangler.test.jsonc`, which
+  omits the `AI` and `VECTORS` bindings (neither runs locally); over HTTP the
+  semantic layer therefore reports `unavailable`, and semantic matching is
+  covered at the core level with the fake.
+- **MCP tests** drive `/mcp` with `@modelcontextprotocol/client`
+  (`Client` + `StreamableHTTPClientTransport` with a custom `fetch`), so they
+  exercise the real protocol negotiation.
 - **Pure units:** normalization table (above), trigram scores (for example
-  `euler identity` vs `euler totient` < 0.6; `ramanujan` vs `ramanujn` ≥ 0.6),
+  `euler identity` vs `euler totient` < 0.6; `srinivasa ramanujan` vs
+  `srinivasa ramanujam` ≥ 0.6),
   decision and ordering rules, token format and hashing, cookie signing.
 - **`SemanticIndex` fake:** an in-memory implementation with deterministic
   embeddings, injected in tests, because Vectorize and Workers AI have no local
@@ -461,8 +470,8 @@ one batch, upsert vectors, mark `indexed`. Failures leave rows `pending`.
   - Semantic failure path yields `semantic: "unavailable"` and a `pending`
     entry; the scheduled handler indexes it.
   - Account deletion cascade.
-- **Auth flow:** GitHub and Google token and user endpoints mocked with
-  `fetchMock`.
+- **Auth flow:** the GitHub and Google clients take an injected `fetch`
+  function; tests pass a fake that answers the token and user endpoints.
 - **Calibration (not CI):** `scripts/calibrate.ts` embeds labeled same/different
   topic pairs with real Workers AI and prints the score distribution. Thresholds
   are set from its output before the first release tag, and the chosen values
@@ -518,7 +527,7 @@ Connectors with URL `https://ledger.twkr.io/mcp`.
 |---|---|
 | Semantic thresholds are guesses | Calibration script gates the first release tag |
 | Deploy token scoped to the wrong account (custom domains require the zone's account) | `twkr.io` confirmed on Cycle Five Syndicate; `CLOUDFLARE_ACCOUNT_ID` pinned to it |
-| Unattended scheduled runs lose auth | Non-expiring refresh tokens; verified against pinned library version |
+| Unattended scheduled runs lose auth | `refreshTokenTTL: undefined` passed explicitly (library default is 30 days); unit-tested |
 | New, fast-moving libraries (OAuth provider, MCP SDK v2, Agents SDK) | Exact version pins; integration tests cover both transports |
 | D1 foreign-key enforcement assumed | Migration test asserts cascades |
 | Trigram scan grows with ledger size | 5,000 most-recent cap per category; about 14 years of daily entries |
