@@ -1,11 +1,17 @@
 import { env } from "cloudflare:test";
 import { getOAuthApi } from "@cloudflare/workers-oauth-provider";
 import { describe, expect, it } from "vitest";
-import { APPROVED_COOKIE, SESSION_COOKIE, STATE_COOKIE } from "../src/auth/session";
+import {
+	APPROVED_COOKIE,
+	createSession,
+	encodeApprovedClients,
+	SESSION_COOKIE,
+	STATE_COOKIE,
+} from "../src/auth/session";
 import type { FetchFn } from "../src/auth/upstream";
 import { providerOptions } from "../src/index";
 import { createWebApp } from "../src/web/app";
-import { ORIGIN } from "./helpers";
+import { ORIGIN, seedUser, testStore } from "./helpers";
 
 const CLIENT_REDIRECT = "https://client.test/callback";
 
@@ -169,6 +175,32 @@ describe("MCP client authorization via GitHub", () => {
 			webEnv(),
 		);
 		expect(callback.status).toBe(502);
+	});
+});
+
+describe("sessions for deleted accounts", () => {
+	it("shows consent instead of granting when the session's user no longer exists", async () => {
+		const app = createWebApp({ fetchFn: fakeUpstream(), now: () => Date.now() });
+		const userId = await seedUser();
+		const session = await createSession(userId, Date.now(), env.COOKIE_SECRET);
+		await testStore().deleteUser(userId);
+		const { client, url } = await startAuthorization(app);
+		const approved = await encodeApprovedClients([client.clientId], env.COOKIE_SECRET);
+
+		const response = await app.request(
+			url.toString(),
+			{
+				headers: {
+					cookie: cookieHeader({ [SESSION_COOKIE]: session, [APPROVED_COOKIE]: approved }),
+				},
+			},
+			webEnv(),
+		);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain("Continue with GitHub");
+		expect(response.headers.getSetCookie().some((c) => c.startsWith(`${SESSION_COOKIE}=;`))).toBe(
+			true,
+		);
 	});
 });
 

@@ -19,7 +19,7 @@ import {
 	upstreamAuthorizationUrl,
 } from "../auth/upstream";
 import { LedgerStore } from "../store/d1";
-import { cookieOptions, isSameOrigin, sessionUserId, type WebDeps, type WebEnv } from "./guards";
+import { cookieOptions, currentUserId, isSameOrigin, type WebDeps, type WebEnv } from "./guards";
 import { ErrorPage, Layout, render } from "./layout";
 
 const Provider = z.enum(["github", "google"]);
@@ -121,7 +121,7 @@ export function registerAuthRoutes(app: Hono<WebEnv>, deps: WebDeps): void {
 			);
 		}
 		const clientName = client.clientName ?? request.clientId;
-		const userId = await sessionUserId(c, deps.now());
+		const userId = await currentUserId(c, deps);
 		if (userId) {
 			const approved = await decodeApprovedClients(
 				getCookie(c, APPROVED_COOKIE),
@@ -149,7 +149,7 @@ export function registerAuthRoutes(app: Hono<WebEnv>, deps: WebDeps): void {
 				400,
 			);
 		}
-		const userId = await sessionUserId(c, deps.now());
+		const userId = await currentUserId(c, deps);
 		if (userId) {
 			const pending = await takePending(c.env.OAUTH_KV, form.data.state);
 			clearState(c);

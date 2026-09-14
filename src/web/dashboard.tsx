@@ -11,7 +11,7 @@ import type { TokenRow } from "../core/rows";
 import { toIso } from "../core/wire";
 import { ledgerFromEnv } from "../services";
 import { LedgerStore, type UserRepeatRow } from "../store/d1";
-import { isSameOrigin, sessionUserId, type WebDeps, type WebEnv } from "./guards";
+import { currentUserId, isSameOrigin, type WebDeps, type WebEnv } from "./guards";
 import { ErrorPage, Layout, render } from "./layout";
 import { BRIEF_PROMPT_SNIPPET } from "./prompt";
 
@@ -28,20 +28,6 @@ const PAGE_LIMIT = 100;
 const MAX_GRANT_SWEEPS = 50;
 
 type Handler = (c: Context<WebEnv>, userId: string) => Promise<Response>;
-
-/**
- * Sessions are stateless HMAC cookies and cannot be revoked, so a session cookie can outlive the
- * user row it names (e.g. after /account/delete on another device). Every gated entry point must
- * confirm the user still exists before running handler code against it; this is the one place
- * that check happens.
- */
-async function currentUserId(c: Context<WebEnv>, deps: WebDeps): Promise<string | null> {
-	const userId = await sessionUserId(c, deps.now());
-	if (userId === null) return null;
-	if (await new LedgerStore(c.env.DB).getUser(userId)) return userId;
-	deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
-	return null;
-}
 
 function LandingPage() {
 	return (

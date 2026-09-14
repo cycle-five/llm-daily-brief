@@ -90,6 +90,14 @@ describe("API authentication", () => {
 		expect(res.status).toBe(200);
 		expect(ListResult.parse(await res.json()).entries).toEqual([]);
 	});
+
+	it("rejects an OAuth access token whose user was deleted", async () => {
+		const userId = await seedUser();
+		const { accessToken } = await issueOAuthTokens(userId);
+		await testStore().deleteUser(userId);
+
+		expect((await SELF.fetch(`${ORIGIN}/api/v1/entries`, authed(accessToken))).status).toBe(401);
+	});
 });
 
 describe("scheduled handler", () => {

@@ -3,6 +3,7 @@ import { globalMinUsersFromEnv } from "../config";
 import { LedgerError } from "../core/errors";
 import { type Env, PropsSchema } from "../env";
 import { ledgerFromEnv } from "../services";
+import { LedgerStore } from "../store/d1";
 import type { ApiContext } from "./context";
 import { errorResponse } from "./errors";
 import { buildMcpServer } from "./mcp";
@@ -16,6 +17,11 @@ export const apiHandler = {
 		const props = PropsSchema.safeParse(ctx.props);
 		if (!props.success) {
 			return errorResponse(new LedgerError("unauthorized", "missing or invalid identity"));
+		}
+		// OAuth grants and access tokens live in KV and are not tied to the users row, so a token
+		// can outlive its account. Refuse it here rather than fail later on a foreign key.
+		if (!(await new LedgerStore(env.DB).getUser(props.data.userId))) {
+			return errorResponse(new LedgerError("unauthorized", "account no longer exists"));
 		}
 		const api: ApiContext = {
 			userId: props.data.userId,
