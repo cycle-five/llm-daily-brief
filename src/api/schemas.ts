@@ -128,3 +128,15 @@ export const ErrorBody = z.object({
 	error: z.object({ code: ErrorCode, message: z.string() }),
 });
 export type ErrorBody = z.infer<typeof ErrorBody>;
+
+/** MCP arguments arrive as JSON numbers, so tools use a plain number instead of query-string coercion. */
+const ToolLimit = z.number().int().min(1).max(100).default(20);
+
+export const ListToolInput = ListInput.extend({ limit: ToolLimit });
+export type ListToolInput = z.infer<typeof ListToolInput>;
+
+export const StatsToolInput = StatsInput.extend({ limit: ToolLimit });
+export type StatsToolInput = z.infer<typeof StatsToolInput>;
+
+export const ForgetResult = z.object({ forgotten: z.string() });
+export type ForgetResult = z.infer<typeof ForgetResult>;

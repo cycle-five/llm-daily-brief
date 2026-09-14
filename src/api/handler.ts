@@ -1,9 +1,11 @@
+import { createMcpHandler } from "agents/mcp/server";
 import { globalMinUsersFromEnv } from "../config";
 import { LedgerError } from "../core/errors";
 import { type Env, PropsSchema } from "../env";
 import { ledgerFromEnv } from "../services";
 import type { ApiContext } from "./context";
 import { errorResponse } from "./errors";
+import { buildMcpServer } from "./mcp";
 import { createRestApp } from "./rest";
 
 const restApp = createRestApp();
@@ -21,6 +23,13 @@ export const apiHandler = {
 			limiter: env.CLAIM_LIMITER,
 			globalMinUsers: globalMinUsersFromEnv(env),
 		};
+		if (new URL(request.url).pathname === "/mcp") {
+			const mcp = createMcpHandler(() => buildMcpServer(api), {
+				route: "/mcp",
+				allowedHostnames: [new URL(env.PUBLIC_ORIGIN).hostname],
+			});
+			return mcp(request, env, ctx);
+		}
 		return restApp.fetch(request, api, ctx);
 	},
 };
