@@ -125,6 +125,16 @@ export class LedgerStore {
 		return results.map((row) => EntryRowSchema.parse(row));
 	}
 
+	async findExact(userId: string, category: string, normalized: string): Promise<EntryRow | null> {
+		const row = await this.db
+			.prepare(
+				`SELECT ${ENTRY_COLUMNS} FROM entries WHERE user_id = ?1 AND category = ?2 AND normalized = ?3`,
+			)
+			.bind(userId, category, normalized)
+			.first();
+		return row ? EntryRowSchema.parse(row) : null;
+	}
+
 	async getEntriesByIds(
 		userId: string,
 		category: string,

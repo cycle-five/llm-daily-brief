@@ -154,6 +154,11 @@ export class Ledger {
 		}
 		const candidates = await this.deps.store.listCandidates(userId, category);
 		const lexical = findLexicalMatches(normalized, candidates, this.deps.thresholds);
+		if (!lexical.some((match) => match.kind === "exact")) {
+			// listCandidates is windowed (CANDIDATE_SCAN_LIMIT); an exact match can lie outside it.
+			const exact = await this.deps.store.findExact(userId, category, normalized);
+			if (exact) lexical.push({ entry: exact, kind: "exact", score: 1, confidence: "repeat" });
+		}
 		const semantic = await this.semanticMatches(userId, category, name, candidates);
 		return {
 			normalized,

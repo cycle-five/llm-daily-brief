@@ -1,13 +1,33 @@
+import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_THRESHOLDS } from "../src/config";
 import { LedgerError } from "../src/core/errors";
 import { Ledger } from "../src/core/ledger";
+import type { EntryRow } from "../src/core/rows";
+import { LedgerStore } from "../src/store/d1";
 import { FakeSemanticIndex } from "./fakes/semantic";
 import { seedUser, testStore, uniqueCategory } from "./helpers";
 
 function makeLedger(semantic = new FakeSemanticIndex()): Ledger {
 	return new Ledger({
 		store: testStore(),
+		semantic,
+		thresholds: DEFAULT_THRESHOLDS,
+		now: () => Date.now(),
+		newId: () => crypto.randomUUID(),
+	});
+}
+
+/** Simulates a user with more entries than listCandidates' scan window returns. */
+class NarrowWindowStore extends LedgerStore {
+	override async listCandidates(): Promise<EntryRow[]> {
+		return [];
+	}
+}
+
+function makeNarrowWindowLedger(semantic: FakeSemanticIndex): Ledger {
+	return new Ledger({
+		store: new NarrowWindowStore(env.DB),
 		semantic,
 		thresholds: DEFAULT_THRESHOLDS,
 		now: () => Date.now(),
@@ -234,5 +254,47 @@ describe("semantic degradation and backfill", () => {
 		expect((await testStore().listPending(1000)).some((row) => row.id === claimed.entry.id)).toBe(
 			true,
 		);
+	});
+});
+
+describe("exact match beyond the candidate scan window", () => {
+	it("claim finds an exact repeat outside the window and records a hit", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeLedger(semantic);
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const first = await ledger.claim(userId, { category, name: "Euler's Identity", force: false });
+		if (first.status !== "claimed") throw new Error("expected claimed");
+
+		const narrowLedger = makeNarrowWindowLedger(semantic);
+		const result = await narrowLedger.claim(userId, {
+			category,
+			name: "euler identity",
+			force: false,
+		});
+
+		expect(result.status).toBe("repeat");
+		if (result.status !== "repeat") return;
+		expect(result.matches[0]).toMatchObject({ entry_id: first.entry.id, kind: "exact" });
+		expect(await hitCount(userId, category, first.entry.id)).toBe(1);
+	});
+
+	it("check reports likely_repeat for an exact repeat outside the window", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeLedger(semantic);
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const first = await ledger.claim(userId, {
+			category,
+			name: "Fermat's Last Theorem",
+			force: false,
+		});
+		if (first.status !== "claimed") throw new Error("expected claimed");
+
+		const narrowLedger = makeNarrowWindowLedger(semantic);
+		const result = await narrowLedger.check(userId, { category, name: "Fermat Last Theorem" });
+
+		expect(result.likely_repeat).toBe(true);
+		expect(await hitCount(userId, category, first.entry.id)).toBe(0);
 	});
 });

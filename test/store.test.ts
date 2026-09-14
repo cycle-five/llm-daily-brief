@@ -68,6 +68,19 @@ describe("entries", () => {
 		]);
 	});
 
+	it("findExact returns the matching row for the owner and null for another user or category", async () => {
+		const store = testStore();
+		const alice = await seedUser("alice");
+		const bob = await seedUser("bob");
+		const category = uniqueCategory();
+		const entry = makeEntry(alice, category, "Euler's Identity");
+		await store.insertEntry(entry);
+
+		expect(await store.findExact(alice, category, entry.normalized)).toEqual(entry);
+		expect(await store.findExact(bob, category, entry.normalized)).toBeNull();
+		expect(await store.findExact(alice, uniqueCategory(), entry.normalized)).toBeNull();
+	});
+
 	it("getEntriesByIds ignores other users' and other categories' ids", async () => {
 		const store = testStore();
 		const alice = await seedUser("alice");
