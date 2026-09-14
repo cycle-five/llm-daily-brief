@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { registerAuthRoutes } from "./auth";
+import { registerDashboardRoutes } from "./dashboard";
 import type { WebDeps, WebEnv } from "./guards";
 
 const defaultDeps: WebDeps = {
@@ -10,11 +11,6 @@ const defaultDeps: WebDeps = {
 export function createWebApp(deps: WebDeps = defaultDeps) {
 	const app = new Hono<WebEnv>();
 	registerAuthRoutes(app, deps);
-	app.get("/", (c) => c.redirect("/login"));
-	app.get("/login", (c) =>
-		c.html(
-			'<!doctype html><title>Topic Ledger</title><h1>Topic Ledger</h1><p><a href="/login/github">Continue with GitHub</a> · <a href="/login/google">Continue with Google</a></p>',
-		),
-	);
+	registerDashboardRoutes(app, deps);
 	return app;
 }
