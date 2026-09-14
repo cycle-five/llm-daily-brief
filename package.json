@@ -1,0 +1,31 @@
+{
+	"name": "topic-ledger",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"typecheck": "tsc --noEmit",
+		"lint": "biome check .",
+		"format": "biome check --write .",
+		"test": "vitest run",
+		"check": "npm run typecheck && npm run lint && npm run test"
+	},
+	"dependencies": {
+		"@cloudflare/workers-oauth-provider": "0.10.3",
+		"@modelcontextprotocol/client": "2.0.0",
+		"@modelcontextprotocol/server": "2.0.0",
+		"agents": "0.23.0",
+		"hono": "4.13.7",
+		"zod": "4.6.5"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.13",
+		"@cloudflare/vitest-plugin": "1.1.9",
+		"@cloudflare/workers-types": "5.20260914.1",
+		"typescript": "6.0.3",
+		"vitest": "4.1.11",
+		"wrangler": "4.131.2"
+	}
+}
