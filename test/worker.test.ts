@@ -23,10 +23,12 @@ function authed(token: string, init: RequestInit = {}): RequestInit {
 }
 
 describe("provider options", () => {
-	it("uses one-hour access tokens and explicitly non-expiring refresh tokens", () => {
+	it("uses one-hour access tokens and explicitly non-expiring refresh tokens and client registrations", () => {
 		expect(providerOptions.accessTokenTTL).toBe(3600);
 		expect(Object.hasOwn(providerOptions, "refreshTokenTTL")).toBe(true);
 		expect(providerOptions.refreshTokenTTL).toBeUndefined();
+		expect(Object.hasOwn(providerOptions, "clientRegistrationTTL")).toBe(true);
+		expect(providerOptions.clientRegistrationTTL).toBeUndefined();
 	});
 
 	it("advertises dynamic client registration for MCP clients", async () => {

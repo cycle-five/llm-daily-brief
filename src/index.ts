@@ -22,6 +22,9 @@ export const providerOptions: OAuthProviderOptions<Env> = {
 	// The library default is 30 days. Scheduled briefs run unattended, so refresh tokens must
 	// not expire until the grant is revoked — and that requires passing undefined explicitly.
 	refreshTokenTTL: undefined,
+	// The library default is 90 days. claude.ai registers dynamically, and an expired client makes
+	// /token fail with invalid_client, so registrations must not expire — again undefined explicitly.
+	clientRegistrationTTL: undefined,
 	resolveExternalToken: async ({ token, env }) => {
 		const resolved = await resolvePersonalToken(new LedgerStore(env.DB), token, Date.now());
 		return resolved ? { props: resolved } : null;
