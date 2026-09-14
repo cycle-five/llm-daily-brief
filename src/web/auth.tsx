@@ -75,13 +75,17 @@ async function completeGrant(
 		scope: ["ledger"],
 		props: { userId },
 	});
-	const approved = await decodeApprovedClients(getCookie(c, APPROVED_COOKIE), c.env.COOKIE_SECRET);
+	const approved = await decodeApprovedClients(
+		getCookie(c, APPROVED_COOKIE),
+		userId,
+		c.env.COOKIE_SECRET,
+	);
 	if (!approved.includes(request.clientId)) {
 		const remembered = [...approved, request.clientId].slice(-MAX_REMEMBERED_CLIENTS);
 		setCookie(
 			c,
 			APPROVED_COOKIE,
-			await encodeApprovedClients(remembered, c.env.COOKIE_SECRET),
+			await encodeApprovedClients(userId, remembered, c.env.COOKIE_SECRET),
 			cookieOptions(SESSION_TTL_SECONDS),
 		);
 	}
@@ -125,6 +129,7 @@ export function registerAuthRoutes(app: Hono<WebEnv>, deps: WebDeps): void {
 		if (userId) {
 			const approved = await decodeApprovedClients(
 				getCookie(c, APPROVED_COOKIE),
+				userId,
 				c.env.COOKIE_SECRET,
 			);
 			if (approved.includes(request.clientId)) return completeGrant(c, request, userId, clientName);
@@ -244,6 +249,7 @@ export function registerAuthRoutes(app: Hono<WebEnv>, deps: WebDeps): void {
 			return render(c, <ErrorPage title="Forbidden" message="Cross-site request refused." />, 403);
 		}
 		deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
+		deleteCookie(c, APPROVED_COOKIE, { path: "/", secure: true });
 		return c.redirect("/");
 	});
 }

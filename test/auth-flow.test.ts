@@ -178,6 +178,48 @@ describe("MCP client authorization via GitHub", () => {
 	});
 });
 
+describe("remembered client approvals on a shared browser", () => {
+	it("asks for consent again when a different user signs in", async () => {
+		const app = createWebApp({ fetchFn: fakeUpstream(), now: () => Date.now() });
+		const { response: consent, url } = await startAuthorization(app);
+		const state = cookiesFrom(consent).get(STATE_COOKIE);
+		const callback = await app.request(
+			`${ORIGIN}/callback/github?code=good&state=${state}`,
+			{ headers: { cookie: cookieHeader({ [STATE_COOKIE]: state }) } },
+			webEnv(),
+		);
+		expect(callback.status).toBe(302);
+		const approvedByA = cookiesFrom(callback).get(APPROVED_COOKIE);
+		expect(approvedByA).toBeTypeOf("string");
+
+		const sessionB = await createSession(await seedUser("b"), Date.now(), env.COOKIE_SECRET);
+		const response = await app.request(
+			url.toString(),
+			{
+				headers: {
+					cookie: cookieHeader({ [SESSION_COOKIE]: sessionB, [APPROVED_COOKIE]: approvedByA }),
+				},
+			},
+			webEnv(),
+		);
+		expect(response.status).toBe(200);
+		expect(await response.text()).toContain("Connect Claude");
+	});
+
+	it("clears the remembered approvals on logout", async () => {
+		const app = createWebApp({ fetchFn: fakeUpstream(), now: () => Date.now() });
+		const response = await app.request(
+			`${ORIGIN}/logout`,
+			{ method: "POST", headers: { origin: ORIGIN } },
+			webEnv(),
+		);
+		expect(response.status).toBe(302);
+		const cleared = response.headers.getSetCookie();
+		expect(cleared.some((c) => c.startsWith(`${SESSION_COOKIE}=;`))).toBe(true);
+		expect(cleared.some((c) => c.startsWith(`${APPROVED_COOKIE}=;`))).toBe(true);
+	});
+});
+
 describe("sessions for deleted accounts", () => {
 	it("shows consent instead of granting when the session's user no longer exists", async () => {
 		const app = createWebApp({ fetchFn: fakeUpstream(), now: () => Date.now() });
@@ -185,7 +227,7 @@ describe("sessions for deleted accounts", () => {
 		const session = await createSession(userId, Date.now(), env.COOKIE_SECRET);
 		await testStore().deleteUser(userId);
 		const { client, url } = await startAuthorization(app);
-		const approved = await encodeApprovedClients([client.clientId], env.COOKIE_SECRET);
+		const approved = await encodeApprovedClients(userId, [client.clientId], env.COOKIE_SECRET);
 
 		const response = await app.request(
 			url.toString(),

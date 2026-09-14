@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { base64UrlEncode } from "../src/auth/encoding";
 import {
 	createSession,
 	decodeApprovedClients,
@@ -31,10 +32,28 @@ describe("sessions", () => {
 });
 
 describe("approved clients", () => {
-	it("round-trips client ids and ignores tampered cookies", async () => {
-		const cookie = await encodeApprovedClients(["client-a", "client.b"], secret);
-		expect(await decodeApprovedClients(cookie, secret)).toEqual(["client-a", "client.b"]);
-		expect(await decodeApprovedClients(`x${cookie}`, secret)).toEqual([]);
-		expect(await decodeApprovedClients(undefined, secret)).toEqual([]);
+	it("round-trips client ids for the same user and ignores other users or tampered cookies", async () => {
+		const cookie = await encodeApprovedClients("user-1", ["client-a", "client.b"], secret);
+		expect(await decodeApprovedClients(cookie, "user-1", secret)).toEqual(["client-a", "client.b"]);
+		expect(await decodeApprovedClients(cookie, "user-2", secret)).toEqual([]);
+		expect(await decodeApprovedClients(`x${cookie}`, "user-1", secret)).toEqual([]);
+		expect(await decodeApprovedClients(undefined, "user-1", secret)).toEqual([]);
+	});
+
+	it("requires the approved. prefix on a correctly signed payload", async () => {
+		const unprefixed = await signValue(
+			base64UrlEncode(
+				new TextEncoder().encode(JSON.stringify({ userId: "user-1", clientIds: ["client-a"] })),
+			),
+			secret,
+		);
+		expect(await decodeApprovedClients(unprefixed, "user-1", secret)).toEqual([]);
+	});
+
+	it("never reads an approved-clients cookie as a session, or a session as approved clients", async () => {
+		const approved = await encodeApprovedClients("user-1", ["client-a"], secret);
+		expect(await readSession(approved, 2_000, secret)).toBeNull();
+		const session = await createSession("user-1", 1_000, secret);
+		expect(await decodeApprovedClients(session, "user-1", secret)).toEqual([]);
 	});
 });

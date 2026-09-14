@@ -65,25 +65,44 @@ export async function readSession(
 	return userId;
 }
 
-const ClientIds = z.array(z.string());
+/**
+ * Domain separation from sessions (`userId.expiresAt`): a session payload never starts with this
+ * prefix, so it cannot decode as approved clients; and an approved payload's text after its last
+ * dot is base64url JSON (never numeric), so it cannot read as a session.
+ */
+const APPROVED_PREFIX = "approved.";
+const ApprovedClients = z.object({ userId: z.string(), clientIds: z.array(z.string()) });
+type ApprovedClients = z.infer<typeof ApprovedClients>;
 
+/** Remembered consent is bound to the user who gave it, so it never carries over to another sign-in. */
 export function encodeApprovedClients(
+	userId: string,
 	clientIds: readonly string[],
 	secret: string,
 ): Promise<string> {
-	return signValue(base64UrlEncode(encoder.encode(JSON.stringify(clientIds))), secret);
+	const payload: ApprovedClients = { userId, clientIds: [...clientIds] };
+	return signValue(
+		`${APPROVED_PREFIX}${base64UrlEncode(encoder.encode(JSON.stringify(payload)))}`,
+		secret,
+	);
 }
 
 export async function decodeApprovedClients(
 	value: string | undefined,
+	userId: string,
 	secret: string,
 ): Promise<string[]> {
 	if (!value) return [];
 	const payload = await verifyValue(value, secret);
-	if (!payload) return [];
+	if (!payload?.startsWith(APPROVED_PREFIX)) return [];
+	let json: unknown;
 	try {
-		return ClientIds.parse(JSON.parse(new TextDecoder().decode(base64UrlDecode(payload))));
+		json = JSON.parse(
+			new TextDecoder().decode(base64UrlDecode(payload.slice(APPROVED_PREFIX.length))),
+		);
 	} catch {
 		return [];
 	}
+	const parsed = ApprovedClients.safeParse(json);
+	return parsed.success && parsed.data.userId === userId ? parsed.data.clientIds : [];
 }
