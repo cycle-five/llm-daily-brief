@@ -3,7 +3,11 @@ import type {
 	CheckResult,
 	ClaimInput,
 	ClaimResult,
+	ListInput,
+	ListResult,
 	SemanticStatus,
+	StatsInput,
+	StatsResult,
 } from "../api/schemas";
 import type { SemanticIndex } from "../semantic/index";
 import type { LedgerStore } from "../store/d1";
@@ -52,6 +56,65 @@ export class Ledger {
 
 	claim(userId: string, input: ClaimInput): Promise<ClaimResult> {
 		return this.claimOnce(userId, input, false);
+	}
+
+	async list(userId: string, input: ListInput): Promise<ListResult> {
+		const rows = await this.deps.store.listEntries(userId, {
+			category: input.category,
+			limit: input.limit,
+			sinceMs: input.since === undefined ? undefined : Date.parse(input.since),
+		});
+		return { entries: rows.map(toWireEntry) };
+	}
+
+	async forget(userId: string, entryId: string): Promise<void> {
+		if (!(await this.deps.store.deleteEntry(userId, entryId))) {
+			throw new LedgerError("not_found", `no entry ${entryId}`);
+		}
+		try {
+			await this.deps.semantic.remove([entryId]);
+		} catch (error) {
+			// Orphaned vectors are harmless: semantic hits are joined against D1.
+			console.warn("vector delete failed", { entryId, error: String(error) });
+		}
+	}
+
+	async stats(userId: string, input: StatsInput, globalMinUsers: number): Promise<StatsResult> {
+		const { store } = this.deps;
+		if (input.scope === "global") {
+			const rows = await store.globalRepeats(input.category, globalMinUsers, input.limit);
+			return {
+				scope: "global",
+				repeats: rows.map((row) => ({
+					display_name: row.display_name,
+					category: row.category,
+					hit_count: row.hit_count,
+					distinct_users: row.distinct_users,
+				})),
+			};
+		}
+		const rows = await store.topRepeatsForUser(userId, input.category, input.limit);
+		return {
+			scope: "me",
+			repeats: rows.map((row) => ({
+				display_name: row.entry.display_name,
+				category: row.entry.category,
+				hit_count: row.entry.hit_count,
+				recent_phrasings: row.phrasings,
+			})),
+		};
+	}
+
+	async deleteAccount(userId: string): Promise<void> {
+		const entryIds = await this.deps.store.deleteUser(userId);
+		try {
+			await this.deps.semantic.remove(entryIds);
+		} catch (error) {
+			console.warn("vector cleanup after account deletion failed", {
+				count: entryIds.length,
+				error: String(error),
+			});
+		}
 	}
 
 	async backfill(limit: number = BACKFILL_BATCH): Promise<number> {

@@ -1,7 +1,11 @@
 import { env } from "cloudflare:test";
+import { DEFAULT_THRESHOLDS } from "../src/config";
+import { Ledger } from "../src/core/ledger";
 import { normalize } from "../src/core/normalize";
 import type { EntryRow, HitRow } from "../src/core/rows";
+import type { SemanticIndex } from "../src/semantic/index";
 import { LedgerStore } from "../src/store/d1";
+import { FakeSemanticIndex } from "./fakes/semantic";
 
 export function testStore(): LedgerStore {
 	return new LedgerStore(env.DB);
@@ -58,5 +62,26 @@ export function makeHit(
 		score: 1,
 		created_at: Date.now(),
 		...overrides,
+	};
+}
+
+export function makeTestLedger(
+	options: { semantic?: SemanticIndex; now?: () => number } = {},
+): Ledger {
+	return new Ledger({
+		store: testStore(),
+		semantic: options.semantic ?? new FakeSemanticIndex(),
+		thresholds: DEFAULT_THRESHOLDS,
+		now: options.now ?? (() => Date.now()),
+		newId: () => crypto.randomUUID(),
+	});
+}
+
+/** Strictly increasing timestamps, so "newest first" orderings are deterministic. */
+export function steppingClock(start = 1_000): () => number {
+	let current = start;
+	return () => {
+		current += 1;
+		return current;
 	};
 }

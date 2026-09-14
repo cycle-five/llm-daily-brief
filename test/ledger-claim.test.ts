@@ -6,17 +6,7 @@ import { Ledger } from "../src/core/ledger";
 import type { EntryRow } from "../src/core/rows";
 import { LedgerStore } from "../src/store/d1";
 import { FakeSemanticIndex } from "./fakes/semantic";
-import { seedUser, testStore, uniqueCategory } from "./helpers";
-
-function makeLedger(semantic = new FakeSemanticIndex()): Ledger {
-	return new Ledger({
-		store: testStore(),
-		semantic,
-		thresholds: DEFAULT_THRESHOLDS,
-		now: () => Date.now(),
-		newId: () => crypto.randomUUID(),
-	});
-}
+import { makeTestLedger, seedUser, testStore, uniqueCategory } from "./helpers";
 
 /** Simulates a user with more entries than listCandidates' scan window returns. */
 class NarrowWindowStore extends LedgerStore {
@@ -43,7 +33,7 @@ async function hitCount(userId: string, category: string, entryId: string): Prom
 describe("Ledger.claim", () => {
 	it("claims a new topic and indexes it", async () => {
 		const semantic = new FakeSemanticIndex();
-		const ledger = makeLedger(semantic);
+		const ledger = makeTestLedger({ semantic });
 		const userId = await seedUser();
 		const category = uniqueCategory();
 
@@ -59,7 +49,7 @@ describe("Ledger.claim", () => {
 	});
 
 	it("blocks an exact repeat and records a hit", async () => {
-		const ledger = makeLedger();
+		const ledger = makeTestLedger();
 		const userId = await seedUser();
 		const category = uniqueCategory();
 		const first = await ledger.claim(userId, { category, name: "Euler's Identity", force: false });
@@ -78,7 +68,7 @@ describe("Ledger.claim", () => {
 	});
 
 	it("blocks a trigram repeat", async () => {
-		const ledger = makeLedger();
+		const ledger = makeTestLedger();
 		const userId = await seedUser();
 		const category = uniqueCategory();
 		await ledger.claim(userId, { category, name: "Srinivasa Ramanujan", force: false });
@@ -96,7 +86,7 @@ describe("Ledger.claim", () => {
 	it("blocks a semantic repeat at or above the repeat threshold", async () => {
 		const semantic = new FakeSemanticIndex();
 		semantic.setSimilarity("Euler's identity", "e^(iπ)+1=0", 0.9);
-		const ledger = makeLedger(semantic);
+		const ledger = makeTestLedger({ semantic });
 		const userId = await seedUser();
 		const category = uniqueCategory();
 		await ledger.claim(userId, { category, name: "Euler's identity", force: false });
@@ -116,7 +106,7 @@ describe("Ledger.claim", () => {
 	it("claims but reports possible matches between the two semantic thresholds, without a hit", async () => {
 		const semantic = new FakeSemanticIndex();
 		semantic.setSimilarity("Fermat's Last Theorem", "Wiles' proof", 0.8);
-		const ledger = makeLedger(semantic);
+		const ledger = makeTestLedger({ semantic });
 		const userId = await seedUser();
 		const category = uniqueCategory();
 		const first = await ledger.claim(userId, {
@@ -141,7 +131,7 @@ describe("Ledger.claim", () => {
 	it("force overrides a semantic repeat, returns the overridden matches, and records no hit", async () => {
 		const semantic = new FakeSemanticIndex();
 		semantic.setSimilarity("Euler's identity", "Euler's totient", 0.9);
-		const ledger = makeLedger(semantic);
+		const ledger = makeTestLedger({ semantic });
 		const userId = await seedUser();
 		const category = uniqueCategory();
 		const first = await ledger.claim(userId, { category, name: "Euler's identity", force: false });
@@ -160,7 +150,7 @@ describe("Ledger.claim", () => {
 	});
 
 	it("force does not override an exact match, and the repeat records a hit", async () => {
-		const ledger = makeLedger();
+		const ledger = makeTestLedger();
 		const userId = await seedUser();
 		const category = uniqueCategory();
 		const first = await ledger.claim(userId, { category, name: "Gauss", force: false });
@@ -174,7 +164,7 @@ describe("Ledger.claim", () => {
 
 	it("never matches another user's entries", async () => {
 		const semantic = new FakeSemanticIndex();
-		const ledger = makeLedger(semantic);
+		const ledger = makeTestLedger({ semantic });
 		const alice = await seedUser("alice");
 		const bob = await seedUser("bob");
 		const category = uniqueCategory();
@@ -186,7 +176,7 @@ describe("Ledger.claim", () => {
 	});
 
 	it("rejects names without letters or digits", async () => {
-		const ledger = makeLedger();
+		const ledger = makeTestLedger();
 		const userId = await seedUser();
 		await expect(
 			ledger.claim(userId, { category: uniqueCategory(), name: "!!!", force: false }),
@@ -199,7 +189,7 @@ describe("Ledger.claim", () => {
 
 describe("Ledger.check", () => {
 	it("reports a likely repeat without recording a hit", async () => {
-		const ledger = makeLedger();
+		const ledger = makeTestLedger();
 		const userId = await seedUser();
 		const category = uniqueCategory();
 		const first = await ledger.claim(userId, { category, name: "Noether", force: false });
@@ -216,7 +206,7 @@ describe("semantic degradation and backfill", () => {
 	it("claims with semantic unavailable, still blocks exact repeats, then backfills", async () => {
 		const semantic = new FakeSemanticIndex();
 		semantic.failing = true;
-		const ledger = makeLedger(semantic);
+		const ledger = makeTestLedger({ semantic });
 		const userId = await seedUser();
 		const category = uniqueCategory();
 
@@ -241,7 +231,7 @@ describe("semantic degradation and backfill", () => {
 	it("backfill returns 0 and leaves rows pending when the index is still failing", async () => {
 		const semantic = new FakeSemanticIndex();
 		semantic.failing = true;
-		const ledger = makeLedger(semantic);
+		const ledger = makeTestLedger({ semantic });
 		const userId = await seedUser();
 		const claimed = await ledger.claim(userId, {
 			category: uniqueCategory(),
@@ -260,7 +250,7 @@ describe("semantic degradation and backfill", () => {
 describe("exact match beyond the candidate scan window", () => {
 	it("claim finds an exact repeat outside the window and records a hit", async () => {
 		const semantic = new FakeSemanticIndex();
-		const ledger = makeLedger(semantic);
+		const ledger = makeTestLedger({ semantic });
 		const userId = await seedUser();
 		const category = uniqueCategory();
 		const first = await ledger.claim(userId, { category, name: "Euler's Identity", force: false });
@@ -281,7 +271,7 @@ describe("exact match beyond the candidate scan window", () => {
 
 	it("check reports likely_repeat for an exact repeat outside the window", async () => {
 		const semantic = new FakeSemanticIndex();
-		const ledger = makeLedger(semantic);
+		const ledger = makeTestLedger({ semantic });
 		const userId = await seedUser();
 		const category = uniqueCategory();
 		const first = await ledger.claim(userId, {
