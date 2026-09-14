@@ -16,6 +16,12 @@ function readNumber(name: string, raw: string | undefined, fallback: number): nu
 	return value;
 }
 
+function readThreshold(name: string, raw: string | undefined, fallback: number): number {
+	const value = readNumber(name, raw, fallback);
+	if (value < 0 || value > 1) throw new Error(`${name} must be between 0 and 1, got "${raw}"`);
+	return value;
+}
+
 export function thresholdsFromEnv(
 	env: Pick<
 		Env,
@@ -23,17 +29,17 @@ export function thresholdsFromEnv(
 	>,
 ): Thresholds {
 	const thresholds: Thresholds = {
-		trigramRepeat: readNumber(
+		trigramRepeat: readThreshold(
 			"TRIGRAM_REPEAT_THRESHOLD",
 			env.TRIGRAM_REPEAT_THRESHOLD,
 			DEFAULT_THRESHOLDS.trigramRepeat,
 		),
-		semanticRepeat: readNumber(
+		semanticRepeat: readThreshold(
 			"SEMANTIC_REPEAT_THRESHOLD",
 			env.SEMANTIC_REPEAT_THRESHOLD,
 			DEFAULT_THRESHOLDS.semanticRepeat,
 		),
-		semanticPossible: readNumber(
+		semanticPossible: readThreshold(
 			"SEMANTIC_POSSIBLE_THRESHOLD",
 			env.SEMANTIC_POSSIBLE_THRESHOLD,
 			DEFAULT_THRESHOLDS.semanticPossible,

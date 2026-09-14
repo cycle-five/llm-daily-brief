@@ -29,6 +29,19 @@ describe("config", () => {
 		);
 	});
 
+	it("rejects thresholds outside [0, 1]", () => {
+		expect(() => thresholdsFromEnv({ ...vars, TRIGRAM_REPEAT_THRESHOLD: "6" })).toThrow(
+			/TRIGRAM_REPEAT_THRESHOLD/,
+		);
+		expect(() => thresholdsFromEnv({ ...vars, SEMANTIC_REPEAT_THRESHOLD: "-0.1" })).toThrow(
+			/SEMANTIC_REPEAT_THRESHOLD/,
+		);
+		expect(thresholdsFromEnv({ ...vars, TRIGRAM_REPEAT_THRESHOLD: "1" }).trigramRepeat).toBe(1);
+		expect(thresholdsFromEnv({ ...vars, SEMANTIC_POSSIBLE_THRESHOLD: "0" }).semanticPossible).toBe(
+			0,
+		);
+	});
+
 	it("parses GLOBAL_MIN_USERS as a positive integer", () => {
 		expect(globalMinUsersFromEnv(vars)).toBe(2);
 		expect(() => globalMinUsersFromEnv({ GLOBAL_MIN_USERS: "0" })).toThrow(/GLOBAL_MIN_USERS/);

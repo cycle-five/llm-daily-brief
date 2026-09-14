@@ -122,6 +122,7 @@ describe("access page", () => {
 		const cookie = await sessionCookie(userId);
 
 		const created = await post("/tokens", cookie, { label: "cron" });
+		expect(created.headers.get("cache-control")).toBe("no-store");
 		const tokens = (await created.text()).match(/ldg_[A-Za-z0-9_-]{43}/g) ?? [];
 		expect(tokens).toHaveLength(1);
 		const token = tokens[0] ?? "";

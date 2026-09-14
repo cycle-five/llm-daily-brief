@@ -370,6 +370,8 @@ export function registerDashboardRoutes(app: Hono<WebEnv>, deps: WebDeps): void 
 				deps.now(),
 				() => crypto.randomUUID(),
 			);
+			// The plaintext token is shown exactly once; keep it out of every cache and back/forward store.
+			c.header("Cache-Control", "no-store");
 			return render(c, await accessPage(c, userId, token));
 		}),
 	);
