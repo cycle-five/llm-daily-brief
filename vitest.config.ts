@@ -18,5 +18,9 @@ export default defineConfig({
 			},
 		})),
 	],
-	test: { setupFiles: ["./test/setup.ts"] },
+	test: {
+		setupFiles: ["./test/setup.ts"],
+		// All files share one local D1; the backfill test touches rows it did not create.
+		fileParallelism: false,
+	},
 });
