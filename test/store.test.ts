@@ -292,7 +292,7 @@ describe("near misses", () => {
 		const toOriginal = makeNearMiss(claim, original, { score: 0.9, created_at: 3 });
 		const toOther = makeNearMiss(claim, other, { score: 0.79, created_at: 3 });
 		await store.insertNearMisses([toOther, toOriginal]);
-		return { store, userId, category, original, claim, toOriginal, toOther };
+		return { store, userId, category, original, other, claim, toOriginal, toOther };
 	}
 
 	it("round-trips rows for a claim, highest score first, scoped to the owner", async () => {
@@ -332,6 +332,31 @@ describe("near misses", () => {
 			{ ...toOriginal, verdict: "repeat", note: "same person", decided_at: 10 },
 			toOther,
 		]);
+	});
+
+	it("skipAsAlias refuses a different near miss once the claim is already an alias", async () => {
+		const { store, userId, original, other, claim, toOriginal, toOther } = await seedClaim();
+		await store.skipAsAlias({
+			nearMissId: toOriginal.id,
+			claimEntryId: claim.id,
+			hit: makeHit(original, claim.display_name, { match_kind: "semantic", score: 0.9 }),
+			note: null,
+			decidedAt: 10,
+		});
+
+		const applied = await store.skipAsAlias({
+			nearMissId: toOther.id,
+			claimEntryId: claim.id,
+			hit: makeHit(other, claim.display_name, { match_kind: "semantic", score: 0.79 }),
+			note: null,
+			decidedAt: 11,
+		});
+
+		expect(applied).toBe(false);
+		expect((await store.getEntry(userId, other.id))?.hit_count).toBe(0);
+		expect((await store.getEntry(userId, claim.id))?.alias_of).toBe(original.id);
+		const rows = await store.listNearMissesForClaim(userId, claim.id);
+		expect(rows.map((row) => row.verdict)).toEqual(["repeat", "pending"]);
 	});
 
 	it("skipAsAlias is a no-op once the claim has been kept", async () => {
