@@ -173,6 +173,7 @@ export class Ledger {
 			normalized: evaluation.normalized,
 			vector_status: "pending",
 			hit_count: 0,
+			alias_of: null,
 			created_at: now(),
 		};
 		if ((await store.insertEntry(entry)) === "duplicate") {

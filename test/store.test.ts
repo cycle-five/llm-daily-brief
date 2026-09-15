@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { makeEntry, makeHit, seedUser, testStore, uniqueCategory } from "./helpers";
+import { makeEntry, makeHit, makeNearMiss, seedUser, testStore, uniqueCategory } from "./helpers";
 
 describe("users and identities", () => {
 	it("returns the same user for the same identity and a new user for another", async () => {
@@ -218,5 +218,180 @@ describe("api tokens", () => {
 		expect(await store.revokeToken(alice, row.id, 30)).toBe(true);
 		expect(await store.findActiveTokenByHash(row.token_hash)).toBeNull();
 		expect(await store.revokeToken(alice, row.id, 40)).toBe(false);
+	});
+});
+
+describe("aliases", () => {
+	it("getEntry returns only the owner's entry", async () => {
+		const store = testStore();
+		const alice = await seedUser("alice");
+		const bob = await seedUser("bob");
+		const entry = makeEntry(alice, uniqueCategory(), "Gauss");
+		await store.insertEntry(entry);
+		expect(await store.getEntry(alice, entry.id)).toEqual(entry);
+		expect(await store.getEntry(bob, entry.id)).toBeNull();
+	});
+
+	it("listAliases returns the owner's aliases; listEntries and topRepeatsForUser exclude aliases", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const original = makeEntry(userId, category, "Euler's identity", { created_at: 1 });
+		// A stale hit_count on the alias proves the repeats listing filters aliases explicitly.
+		const alias = makeEntry(userId, category, "e^(iπ)+1=0", {
+			alias_of: original.id,
+			hit_count: 1,
+			created_at: 2,
+		});
+		for (const e of [original, alias]) await store.insertEntry(e);
+		await store.recordHit(makeHit(original, "Euler identity"));
+
+		expect((await store.listAliases(userId, [original.id])).map((e) => e.id)).toEqual([alias.id]);
+		expect(await store.listAliases(await seedUser("other"), [original.id])).toEqual([]);
+		expect(await store.listAliases(userId, [])).toEqual([]);
+		expect((await store.listEntries(userId, { category, limit: 20 })).map((e) => e.id)).toEqual([
+			original.id,
+		]);
+		expect((await store.topRepeatsForUser(userId, category, 20)).map((r) => r.entry.id)).toEqual([
+			original.id,
+		]);
+	});
+
+	it("globalRepeats picks the display name from originals only", async () => {
+		const store = testStore();
+		const category = uniqueCategory();
+		for (const label of ["a", "b"]) {
+			const userId = await seedUser(label);
+			const entry = makeEntry(userId, category, "Euler's identity");
+			await store.insertEntry(entry);
+			await store.recordHit(makeHit(entry, "Euler identity"));
+		}
+		for (const label of ["c", "d", "e"]) {
+			const userId = await seedUser(label);
+			const original = makeEntry(userId, category, "Euler's formula");
+			await store.insertEntry(original);
+			await store.insertEntry(
+				makeEntry(userId, category, "Euler’s Identity", { alias_of: original.id }),
+			);
+		}
+		expect(await store.globalRepeats(category, 2, 20)).toEqual([
+			{ category, display_name: "Euler's identity", hit_count: 2, distinct_users: 2 },
+		]);
+	});
+});
+
+describe("near misses", () => {
+	async function seedClaim() {
+		const store = testStore();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const original = makeEntry(userId, category, "Ibn al-Haytham", { created_at: 1 });
+		const other = makeEntry(userId, category, "Omar Khayyam", { created_at: 2 });
+		const claim = makeEntry(userId, category, "Alhazen", { created_at: 3 });
+		for (const e of [original, other, claim]) await store.insertEntry(e);
+		const toOriginal = makeNearMiss(claim, original, { score: 0.9, created_at: 3 });
+		const toOther = makeNearMiss(claim, other, { score: 0.79, created_at: 3 });
+		await store.insertNearMisses([toOther, toOriginal]);
+		return { store, userId, category, original, claim, toOriginal, toOther };
+	}
+
+	it("round-trips rows for a claim, highest score first, scoped to the owner", async () => {
+		const { store, userId, claim, toOriginal, toOther } = await seedClaim();
+		expect(await store.listNearMissesForClaim(userId, claim.id)).toEqual([toOriginal, toOther]);
+		expect(await store.listNearMissesForClaim(await seedUser("other"), claim.id)).toEqual([]);
+		await store.insertNearMisses([]);
+	});
+
+	it("skipAsAlias records the hit, marks the row, aliases the claim, and applies only once", async () => {
+		const { store, userId, category, original, claim, toOriginal, toOther } = await seedClaim();
+		const write = {
+			nearMissId: toOriginal.id,
+			claimEntryId: claim.id,
+			hit: makeHit(original, claim.display_name, {
+				match_kind: "semantic",
+				score: 0.9,
+				created_at: 10,
+			}),
+			note: "same person",
+			decidedAt: 10,
+		};
+
+		expect(await store.skipAsAlias(write)).toBe(true);
+		expect(
+			await store.skipAsAlias({ ...write, hit: { ...write.hit, id: crypto.randomUUID() } }),
+		).toBe(false);
+
+		expect((await store.getEntry(userId, claim.id))?.alias_of).toBe(original.id);
+		const [repeat] = await store.topRepeatsForUser(userId, category, 20);
+		expect(repeat?.entry.id).toBe(original.id);
+		expect(repeat?.entry.hit_count).toBe(1);
+		expect(repeat?.hits).toEqual([
+			{ candidate_text: "Alhazen", match_kind: "semantic", score: 0.9 },
+		]);
+		expect(await store.listNearMissesForClaim(userId, claim.id)).toEqual([
+			{ ...toOriginal, verdict: "repeat", note: "same person", decided_at: 10 },
+			toOther,
+		]);
+	});
+
+	it("skipAsAlias is a no-op once the claim has been kept", async () => {
+		const { store, userId, category, original, claim, toOriginal } = await seedClaim();
+		expect(await store.keepPending(userId, claim.id, "different people", 10)).toBe(2);
+
+		const applied = await store.skipAsAlias({
+			nearMissId: toOriginal.id,
+			claimEntryId: claim.id,
+			hit: makeHit(original, claim.display_name),
+			note: null,
+			decidedAt: 11,
+		});
+
+		expect(applied).toBe(false);
+		expect((await store.getEntry(userId, claim.id))?.alias_of).toBeNull();
+		expect(await store.topRepeatsForUser(userId, category, 20)).toEqual([]);
+		expect(await store.keepPending(userId, claim.id, null, 12)).toBe(0);
+	});
+
+	it("keepPending does nothing for another user or for a claim that is now an alias", async () => {
+		const { store, userId, original, claim, toOriginal } = await seedClaim();
+		expect(await store.keepPending(await seedUser("other"), claim.id, null, 10)).toBe(0);
+		await store.skipAsAlias({
+			nearMissId: toOriginal.id,
+			claimEntryId: claim.id,
+			hit: makeHit(original, claim.display_name),
+			note: null,
+			decidedAt: 10,
+		});
+		expect(await store.keepPending(userId, claim.id, null, 11)).toBe(0);
+	});
+
+	it("listNearMisses joins names, alias state and via, newest first", async () => {
+		const { store, userId, category, original } = await seedClaim();
+		const via = makeEntry(userId, category, "Alhazen of Basra", {
+			alias_of: original.id,
+			created_at: 4,
+		});
+		const later = makeEntry(userId, category, "Father of optics", { created_at: 5 });
+		for (const e of [via, later]) await store.insertEntry(e);
+		await store.insertNearMisses([
+			makeNearMiss(later, original, { via_entry_id: via.id, score: 0.81, created_at: 5 }),
+		]);
+
+		const rows = await store.listNearMisses(userId, 20);
+
+		expect(rows.map((r) => [r.claim_name, r.matched_name, r.via_name])).toEqual([
+			["Father of optics", "Ibn al-Haytham", "Alhazen of Basra"],
+			["Alhazen", "Ibn al-Haytham", null],
+			["Alhazen", "Omar Khayyam", null],
+		]);
+		expect(rows[0]).toMatchObject({
+			category,
+			claim_alias_of: null,
+			match_kind: "semantic",
+			score: 0.81,
+			verdict: "pending",
+			note: null,
+		});
+		expect(await store.listNearMisses(await seedUser("other"), 20)).toEqual([]);
 	});
 });

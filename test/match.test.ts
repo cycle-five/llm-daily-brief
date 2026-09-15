@@ -20,6 +20,7 @@ function entry(overrides: Partial<EntryRow> & Pick<EntryRow, "id" | "normalized"
 		display_name: overrides.normalized,
 		vector_status: "indexed",
 		hit_count: 0,
+		alias_of: null,
 		created_at: Date.UTC(2026, 8, 14),
 		...overrides,
 	};
