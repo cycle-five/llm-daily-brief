@@ -5,6 +5,9 @@
 - **Branch:** `feat/topic-ledger`
 - **Amended 2026-09-15:** embedding model and semantic thresholds changed after calibration
   (`docs/calibration.md`); semantic matches are advisory by default.
+- **Amended 2026-09-15:** near misses, verdicts (`skip_topic` / `keep_topic`) and topic
+  aliases — see `docs/superpowers/specs/2026-09-15-near-misses-design.md`, which wins where
+  the two disagree.
 
 ## Problem
 
