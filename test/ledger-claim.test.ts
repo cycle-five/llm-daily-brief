@@ -3,10 +3,11 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_THRESHOLDS } from "../src/config";
 import { LedgerError } from "../src/core/errors";
 import { Ledger } from "../src/core/ledger";
+import { MAX_MATCHES } from "../src/core/match";
 import type { EntryRow } from "../src/core/rows";
 import { LedgerStore } from "../src/store/d1";
 import { FakeSemanticIndex } from "./fakes/semantic";
-import { makeTestLedger, seedUser, testStore, uniqueCategory } from "./helpers";
+import { makeEntry, makeTestLedger, seedUser, testStore, uniqueCategory } from "./helpers";
 
 /** Production defaults keep semantic matches advisory; blocking stays configurable. */
 const BLOCKING_THRESHOLDS = { ...DEFAULT_THRESHOLDS, semanticRepeat: 0.85 };
@@ -310,5 +311,128 @@ describe("exact match beyond the candidate scan window", () => {
 
 		expect(result.likely_repeat).toBe(true);
 		expect(await hitCount(userId, category, first.entry.id)).toBe(0);
+	});
+});
+
+describe("aliases", () => {
+	async function seedAlias(
+		userId: string,
+		category: string,
+		originalId: string,
+		name: string,
+		semantic?: FakeSemanticIndex,
+	): Promise<EntryRow> {
+		const alias = makeEntry(userId, category, name, {
+			alias_of: originalId,
+			vector_status: "indexed",
+		});
+		await testStore().insertEntry(alias);
+		await semantic?.upsert([{ entryId: alias.id, userId, category, text: name }]);
+		return alias;
+	}
+
+	it("blocks an exact repeat of an alias as a repeat of the original, with the hit on the original", async () => {
+		const ledger = makeTestLedger();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const first = await ledger.claim(userId, { category, name: "Ibn al-Haytham", force: false });
+		if (first.status !== "claimed") throw new Error("expected claimed");
+		const alias = await seedAlias(userId, category, first.entry.id, "Alhazen");
+
+		const result = await ledger.claim(userId, { category, name: "alhazen", force: false });
+
+		expect(result.status).toBe("repeat");
+		if (result.status !== "repeat") return;
+		expect(result.matches).toMatchObject([
+			{
+				entry_id: first.entry.id,
+				display_name: "Ibn al-Haytham",
+				kind: "exact",
+				via_alias: "Alhazen",
+				hit_count: 1,
+			},
+		]);
+		expect(await hitCount(userId, category, first.entry.id)).toBe(1);
+		expect((await testStore().getEntry(userId, alias.id))?.hit_count).toBe(0);
+	});
+
+	it("blocks a spelling variant of an alias through trigram matching", async () => {
+		const ledger = makeTestLedger();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const first = await ledger.claim(userId, {
+			category,
+			name: "Srinivasa Ramanujan",
+			force: false,
+		});
+		if (first.status !== "claimed") throw new Error("expected claimed");
+		await seedAlias(userId, category, first.entry.id, "The Man Who Knew Infinity");
+
+		const result = await ledger.claim(userId, {
+			category,
+			name: "The Man Who Knew Infinty",
+			force: false,
+		});
+
+		expect(result.status).toBe("repeat");
+		if (result.status === "repeat") {
+			expect(result.matches[0]).toMatchObject({
+				entry_id: first.entry.id,
+				kind: "trigram",
+				via_alias: "The Man Who Knew Infinity",
+			});
+		}
+	});
+
+	it("reports an original matched directly and through an alias once, as its strongest match", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeTestLedger({ semantic });
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const first = await ledger.claim(userId, { category, name: "Ibn al-Haytham", force: false });
+		if (first.status !== "claimed") throw new Error("expected claimed");
+		await seedAlias(userId, category, first.entry.id, "Alhazen", semantic);
+		semantic.setSimilarity("Alhazen", "Father of optics", 0.9);
+		semantic.setSimilarity("Ibn al-Haytham", "Father of optics", 0.8);
+
+		const result = await ledger.check(userId, { category, name: "Father of optics" });
+
+		expect(result.likely_repeat).toBe(false);
+		expect(result.matches).toHaveLength(1);
+		expect(result.matches[0]).toMatchObject({
+			entry_id: first.entry.id,
+			kind: "semantic",
+			score: 0.9,
+			via_alias: "Alhazen",
+		});
+	});
+
+	it("over-fetches semantic results so one topic's aliases do not crowd out other topics", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeTestLedger({ semantic });
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const crowded = await ledger.claim(userId, { category, name: "Leonhard Euler", force: false });
+		const other = await ledger.claim(userId, {
+			category,
+			name: "Carl Friedrich Gauss",
+			force: false,
+		});
+		if (crowded.status !== "claimed" || other.status !== "claimed") {
+			throw new Error("expected claimed");
+		}
+		for (let i = 1; i <= MAX_MATCHES; i++) {
+			const name = `Euler alias ${i}`;
+			await seedAlias(userId, category, crowded.entry.id, name, semantic);
+			semantic.setSimilarity(name, "Prince of mathematicians", 0.95);
+		}
+		semantic.setSimilarity("Carl Friedrich Gauss", "Prince of mathematicians", 0.8);
+
+		const result = await ledger.check(userId, { category, name: "Prince of mathematicians" });
+
+		expect(result.matches.map((match) => match.entry_id)).toEqual([
+			crowded.entry.id,
+			other.entry.id,
+		]);
 	});
 });

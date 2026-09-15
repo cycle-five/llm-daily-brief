@@ -35,6 +35,7 @@ export const Match = z.object({
 	confidence: Confidence,
 	first_seen: z.string(),
 	hit_count: z.number().int(),
+	via_alias: z.string().optional(),
 });
 export type Match = z.infer<typeof Match>;
 

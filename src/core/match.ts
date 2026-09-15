@@ -18,6 +18,8 @@ export interface ScoredMatch {
 	kind: MatchKind;
 	score: number;
 	confidence: Confidence;
+	/** The alias whose text actually matched, when `entry` was reached through one. */
+	via?: EntryRow;
 }
 
 export const MAX_MATCHES = 5;
@@ -56,6 +58,29 @@ export function classifySemanticHits(
 			out.push({ entry, kind: "semantic", score: hit.score, confidence: "repeat" });
 		} else if (hit.score >= thresholds.semanticPossible) {
 			out.push({ entry, kind: "semantic", score: hit.score, confidence: "possible" });
+		}
+	}
+	return out;
+}
+
+/**
+ * Replaces each match on an alias with the same match on its original, keeping the alias as `via`,
+ * so hits, verdicts and near misses always reference originals. Matches whose original is missing
+ * from `entriesById` (or is itself an alias) are dropped.
+ */
+export function resolveAliases(
+	matches: readonly ScoredMatch[],
+	entriesById: ReadonlyMap<string, EntryRow>,
+): ScoredMatch[] {
+	const out: ScoredMatch[] = [];
+	for (const match of matches) {
+		if (match.entry.alias_of === null) {
+			out.push(match);
+			continue;
+		}
+		const original = entriesById.get(match.entry.alias_of);
+		if (original && original.alias_of === null) {
+			out.push({ ...match, entry: original, via: match.entry });
 		}
 	}
 	return out;

@@ -18,6 +18,7 @@ import {
 	isLikelyRepeat,
 	MAX_MATCHES,
 	rankMatches,
+	resolveAliases,
 	type ScoredMatch,
 	type SemanticHit,
 	type Thresholds,
@@ -41,6 +42,9 @@ interface Evaluation {
 }
 
 export const BACKFILL_BATCH = 100;
+
+/** One topic's aliases can fill the semantic results; over-fetch before resolving and ranking. */
+export const SEMANTIC_TOP_K = MAX_MATCHES * 2;
 
 export class Ledger {
 	constructor(private readonly deps: LedgerDeps) {}
@@ -224,11 +228,35 @@ export class Ledger {
 			if (exact) lexical.push({ entry: exact, kind: "exact", score: 1, confidence: "repeat" });
 		}
 		const semantic = await this.semanticMatches(userId, category, name, candidates);
+		const resolved = await this.withOriginals(
+			userId,
+			category,
+			[...lexical, ...semantic.matches],
+			candidates,
+		);
 		return {
 			normalized,
-			matches: rankMatches([...lexical, ...semantic.matches]),
+			matches: rankMatches(resolved),
 			semantic: semantic.status,
 		};
+	}
+
+	private async withOriginals(
+		userId: string,
+		category: string,
+		matches: readonly ScoredMatch[],
+		candidates: readonly EntryRow[],
+	): Promise<ScoredMatch[]> {
+		const byId = new Map(candidates.map((entry) => [entry.id, entry]));
+		const missing = new Set<string>();
+		for (const match of matches) {
+			const originalId = match.entry.alias_of;
+			if (originalId !== null && !byId.has(originalId)) missing.add(originalId);
+		}
+		for (const row of await this.deps.store.getEntriesByIds(userId, category, [...missing])) {
+			byId.set(row.id, row);
+		}
+		return resolveAliases(matches, byId);
 	}
 
 	private async semanticMatches(
@@ -239,7 +267,7 @@ export class Ledger {
 	): Promise<{ matches: ScoredMatch[]; status: SemanticStatus }> {
 		let hits: SemanticHit[];
 		try {
-			hits = await this.deps.semantic.query({ userId, category, text: name, topK: MAX_MATCHES });
+			hits = await this.deps.semantic.query({ userId, category, text: name, topK: SEMANTIC_TOP_K });
 		} catch (error) {
 			console.warn("semantic query failed", { error: String(error) });
 			return { matches: [], status: "unavailable" };

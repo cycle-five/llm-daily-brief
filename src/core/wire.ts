@@ -17,7 +17,7 @@ export function toWireEntry(row: EntryRow): Entry {
 }
 
 export function toWireMatch(match: ScoredMatch, hitCountBonus = 0): Match {
-	return {
+	const wire: Match = {
 		entry_id: match.entry.id,
 		display_name: match.entry.display_name,
 		category: match.entry.category,
@@ -27,4 +27,5 @@ export function toWireMatch(match: ScoredMatch, hitCountBonus = 0): Match {
 		first_seen: toIso(match.entry.created_at),
 		hit_count: match.entry.hit_count + hitCountBonus,
 	};
+	return match.via ? { ...wire, via_alias: match.via.display_name } : wire;
 }

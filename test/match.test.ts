@@ -5,6 +5,7 @@ import {
 	isLikelyRepeat,
 	MAX_MATCHES,
 	rankMatches,
+	resolveAliases,
 	type ScoredMatch,
 	type Thresholds,
 } from "../src/core/match";
@@ -137,5 +138,49 @@ describe("toWireMatch", () => {
 			first_seen: "2026-09-14T00:00:00.000Z",
 			hit_count: 3,
 		});
+	});
+
+	it("names the alias that matched, and omits via_alias otherwise", () => {
+		const original = entry({ id: "o", normalized: "o", display_name: "Ibn al-Haytham" });
+		const alias = entry({ id: "a", normalized: "a", display_name: "Alhazen", alias_of: "o" });
+		const base: ScoredMatch = {
+			entry: original,
+			kind: "semantic",
+			score: 0.9,
+			confidence: "possible",
+		};
+		expect(toWireMatch({ ...base, via: alias })).toMatchObject({
+			entry_id: "o",
+			display_name: "Ibn al-Haytham",
+			via_alias: "Alhazen",
+		});
+		expect(Object.hasOwn(toWireMatch(base), "via_alias")).toBe(false);
+	});
+});
+
+describe("resolveAliases", () => {
+	const original = entry({ id: "o", normalized: "euler identity" });
+	const alias = entry({ id: "a", normalized: "leonhard euler identity", alias_of: "o" });
+	const orphan = entry({ id: "x", normalized: "orphan", alias_of: "missing" });
+	const chained = entry({ id: "c", normalized: "chained", alias_of: "a" });
+	const known = new Map([
+		[original.id, original],
+		[alias.id, alias],
+	]);
+
+	it("moves alias matches onto the original, keeps kind and score, and drops orphans and chains", () => {
+		const out = resolveAliases(
+			[
+				{ entry: original, kind: "semantic", score: 0.8, confidence: "possible" },
+				{ entry: alias, kind: "exact", score: 1, confidence: "repeat" },
+				{ entry: orphan, kind: "trigram", score: 0.7, confidence: "repeat" },
+				{ entry: chained, kind: "trigram", score: 0.7, confidence: "repeat" },
+			],
+			known,
+		);
+		expect(out).toEqual([
+			{ entry: original, kind: "semantic", score: 0.8, confidence: "possible" },
+			{ entry: original, kind: "exact", score: 1, confidence: "repeat", via: alias },
+		]);
 	});
 });
