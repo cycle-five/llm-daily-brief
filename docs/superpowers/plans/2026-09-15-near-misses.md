@@ -21,8 +21,8 @@
 - **Exact strings (copy verbatim):**
   - `NEXT_STEP` = `Decide whether this topic is the same as any possible match. If it is, call skip_topic with repeat_of set to that match's entry_id and choose a different topic. Otherwise call keep_topic.`
   - `FORCED_NOTE` = `forced`
-  - Dashboard verdict labels use the em dash U+2014, written as the escape `—` in source: `Repeat — skipped`, `Different — kept`, `No verdict — used`, `Not judged — claim skipped`.
-- **Non-ASCII in source:** write U+2019 (curly apostrophe) and U+2014 (em dash) as `’` / `—` escapes inside string literals, never as raw characters. After editing, `grep -caP '\x00' <file>` must print `0` for every file you touched.
+  - Dashboard verdict labels use the em dash U+2014: `Repeat — skipped`, `Different — kept`, `No verdict — used`, `Not judged — claim skipped`. The page and the test that asserts it must carry the same characters.
+- **Non-ASCII in source (amended, ruling R1):** in `src/` *pattern constants* — regexes and normalization tables, such as the possessive regex in `src/core/normalize.ts`, which silently lost its U+2019 in an earlier session — write the character as a JavaScript escape (a backslash, then `u`, then the four hex digits), never as the character itself. Everywhere else, including test data and UI label strings, copy the character itself and follow the surrounding file (`test/store.test.ts` already stores a raw `π`). After editing, verify the bytes: `grep -caP '\x00' <file>` must print `0`, and a character you pasted must still be the character you meant.
 - **Test isolation:** never assume an empty database. Every test creates its own users (`seedUser()`) and categories (`uniqueCategory()`). Test files run serially against one local D1.
 - **Formatting:** Biome, tabs, line width 100. Run `npx biome check --write <files you changed>` before the gate.
 - **Commits:** every commit message ends with exactly this trailer line and no other `Co-Authored-By` line:
