@@ -435,4 +435,26 @@ describe("aliases", () => {
 			other.entry.id,
 		]);
 	});
+
+	it("resolves an alias whose original lies outside the candidate scan window", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeTestLedger({ semantic });
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const first = await ledger.claim(userId, { category, name: "Ibn al-Haytham", force: false });
+		if (first.status !== "claimed") throw new Error("expected claimed");
+		await seedAlias(userId, category, first.entry.id, "Alhazen", semantic);
+
+		const narrowLedger = makeNarrowWindowLedger(semantic);
+		const result = await narrowLedger.claim(userId, { category, name: "alhazen", force: false });
+
+		expect(result.status).toBe("repeat");
+		if (result.status !== "repeat") return;
+		expect(result.matches[0]).toMatchObject({
+			entry_id: first.entry.id,
+			kind: "exact",
+			via_alias: "Alhazen",
+		});
+		expect(await hitCount(userId, category, first.entry.id)).toBe(1);
+	});
 });
