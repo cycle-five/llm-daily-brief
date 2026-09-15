@@ -44,7 +44,7 @@ describe("StatsInput", () => {
 });
 
 describe("ClaimResult", () => {
-	it("parses both variants", () => {
+	it("parses all three variants", () => {
 		const entry = {
 			id: "e1",
 			category: "math",
@@ -57,12 +57,30 @@ describe("ClaimResult", () => {
 				status: "claimed",
 				entry,
 				forced: false,
-				possible_matches: [],
+				overridden_matches: [],
 				semantic: "ok",
 			}).status,
 		).toBe("claimed");
 		expect(
+			ClaimResult.parse({
+				status: "possible_repeat",
+				entry,
+				possible_matches: [],
+				next_step: "decide",
+				semantic: "ok",
+			}).status,
+		).toBe("possible_repeat");
+		expect(
 			ClaimResult.parse({ status: "repeat", matches: [], semantic: "unavailable" }).status,
 		).toBe("repeat");
+		expect(
+			ClaimResult.safeParse({
+				status: "claimed",
+				entry,
+				forced: false,
+				possible_matches: [],
+				semantic: "ok",
+			}).success,
+		).toBe(false);
 	});
 });

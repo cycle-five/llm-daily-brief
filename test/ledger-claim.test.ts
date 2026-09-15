@@ -2,7 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_THRESHOLDS } from "../src/config";
 import { LedgerError } from "../src/core/errors";
-import { Ledger } from "../src/core/ledger";
+import { FORCED_NOTE, Ledger, NEXT_STEP } from "../src/core/ledger";
 import { MAX_MATCHES } from "../src/core/match";
 import type { EntryRow } from "../src/core/rows";
 import { LedgerStore } from "../src/store/d1";
@@ -46,7 +46,8 @@ describe("Ledger.claim", () => {
 		expect(result.status).toBe("claimed");
 		if (result.status !== "claimed") return;
 		expect(result.entry.display_name).toBe("Euler's Identity");
-		expect(result).toMatchObject({ forced: false, possible_matches: [], semantic: "ok" });
+		expect(result).toMatchObject({ forced: false, overridden_matches: [], semantic: "ok" });
+		expect(await testStore().listNearMissesForClaim(userId, result.entry.id)).toEqual([]);
 		expect(semantic.documents.get(result.entry.id)?.text).toBe("Euler's Identity");
 		const pending = await testStore().listPending(1000);
 		expect(pending.some((row) => row.id === result.entry.id)).toBe(false);
@@ -87,7 +88,7 @@ describe("Ledger.claim", () => {
 		if (result.status === "repeat") expect(result.matches[0]?.kind).toBe("trigram");
 	});
 
-	it("treats a strong semantic match as advisory under the default thresholds, without a hit", async () => {
+	it("returns possible_repeat for a strong semantic match, records a pending near miss, and no hit", async () => {
 		const semantic = new FakeSemanticIndex();
 		semantic.setSimilarity("Euler's identity", "e^(iπ)+1=0", 0.95);
 		const ledger = makeTestLedger({ semantic });
@@ -98,13 +99,25 @@ describe("Ledger.claim", () => {
 
 		const result = await ledger.claim(userId, { category, name: "e^(iπ)+1=0", force: false });
 
-		expect(result.status).toBe("claimed");
-		if (result.status === "claimed") {
-			expect(result.forced).toBe(false);
-			expect(result.possible_matches).toMatchObject([
-				{ entry_id: first.entry.id, kind: "semantic", confidence: "possible", score: 0.95 },
-			]);
-		}
+		expect(result.status).toBe("possible_repeat");
+		if (result.status !== "possible_repeat") return;
+		expect(result.next_step).toBe(NEXT_STEP);
+		expect(result.possible_matches).toMatchObject([
+			{ entry_id: first.entry.id, kind: "semantic", confidence: "possible", score: 0.95 },
+		]);
+		expect(await testStore().listNearMissesForClaim(userId, result.entry.id)).toMatchObject([
+			{
+				user_id: userId,
+				claim_entry_id: result.entry.id,
+				matched_entry_id: first.entry.id,
+				via_entry_id: null,
+				match_kind: "semantic",
+				score: 0.95,
+				verdict: "pending",
+				note: null,
+				decided_at: null,
+			},
+		]);
 		expect(await hitCount(userId, category, first.entry.id)).toBe(0);
 	});
 
@@ -128,7 +141,7 @@ describe("Ledger.claim", () => {
 		}
 	});
 
-	it("claims but reports possible matches between the two semantic thresholds, without a hit", async () => {
+	it("returns possible_repeat between the two semantic thresholds, without a hit", async () => {
 		const semantic = new FakeSemanticIndex();
 		semantic.setSimilarity("Fermat's Last Theorem", "Wiles' proof", 0.8);
 		const ledger = makeTestLedger({ semantic });
@@ -143,9 +156,8 @@ describe("Ledger.claim", () => {
 
 		const result = await ledger.claim(userId, { category, name: "Wiles' proof", force: false });
 
-		expect(result.status).toBe("claimed");
-		if (result.status === "claimed") {
-			expect(result.forced).toBe(false);
+		expect(result.status).toBe("possible_repeat");
+		if (result.status === "possible_repeat") {
 			expect(result.possible_matches).toMatchObject([
 				{ entry_id: first.entry.id, confidence: "possible" },
 			]);
@@ -167,9 +179,16 @@ describe("Ledger.claim", () => {
 		expect(result.status).toBe("claimed");
 		if (result.status === "claimed") {
 			expect(result.forced).toBe(true);
-			expect(result.possible_matches).toMatchObject([
+			expect(result.overridden_matches).toMatchObject([
 				{ entry_id: first.entry.id, confidence: "repeat" },
 			]);
+			const [row] = await testStore().listNearMissesForClaim(userId, result.entry.id);
+			expect(row).toMatchObject({
+				matched_entry_id: first.entry.id,
+				verdict: "distinct",
+				note: FORCED_NOTE,
+			});
+			expect(row?.decided_at).toBe(row?.created_at);
 		}
 		expect(await hitCount(userId, category, first.entry.id)).toBe(0);
 	});
@@ -456,5 +475,27 @@ describe("aliases", () => {
 			via_alias: "Alhazen",
 		});
 		expect(await hitCount(userId, category, first.entry.id)).toBe(1);
+	});
+
+	it("records the alias a possible match came through", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeTestLedger({ semantic });
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const first = await ledger.claim(userId, { category, name: "Ibn al-Haytham", force: false });
+		if (first.status !== "claimed") throw new Error("expected claimed");
+		const alias = await seedAlias(userId, category, first.entry.id, "Alhazen", semantic);
+		semantic.setSimilarity("Alhazen", "Father of optics", 0.85);
+
+		const result = await ledger.claim(userId, { category, name: "Father of optics", force: false });
+
+		expect(result.status).toBe("possible_repeat");
+		if (result.status !== "possible_repeat") return;
+		expect(result.possible_matches).toMatchObject([
+			{ entry_id: first.entry.id, via_alias: "Alhazen" },
+		]);
+		expect(await testStore().listNearMissesForClaim(userId, result.entry.id)).toMatchObject([
+			{ matched_entry_id: first.entry.id, via_entry_id: alias.id, verdict: "pending" },
+		]);
 	});
 });

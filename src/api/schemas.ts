@@ -60,7 +60,15 @@ export const ClaimResult = z.discriminatedUnion("status", [
 		status: z.literal("claimed"),
 		entry: Entry,
 		forced: z.boolean(),
+		/** Matches a forced claim overrode; empty unless forced. */
+		overridden_matches: z.array(Match),
+		semantic: SemanticStatus,
+	}),
+	z.object({
+		status: z.literal("possible_repeat"),
+		entry: Entry,
 		possible_matches: z.array(Match),
+		next_step: z.string(),
 		semantic: SemanticStatus,
 	}),
 	z.object({

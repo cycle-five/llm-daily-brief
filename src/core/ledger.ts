@@ -24,7 +24,7 @@ import {
 	type Thresholds,
 } from "./match";
 import { normalize } from "./normalize";
-import type { EntryRow } from "./rows";
+import type { EntryRow, NearMissRow } from "./rows";
 import { toWireEntry, toWireMatch } from "./wire";
 
 export interface LedgerDeps {
@@ -45,6 +45,12 @@ export const BACKFILL_BATCH = 100;
 
 /** One topic's aliases can fill the semantic results; over-fetch before resolving and ranking. */
 export const SEMANTIC_TOP_K = MAX_MATCHES * 2;
+
+/** Sent with every possible_repeat so an LLM caller knows a verdict is expected. */
+export const NEXT_STEP =
+	"Decide whether this topic is the same as any possible match. If it is, call skip_topic with repeat_of set to that match's entry_id and choose a different topic. Otherwise call keep_topic.";
+/** Note stored on near misses a forced claim overrode: the caller already decided they differ. */
+export const FORCED_NOTE = "forced";
 
 export class Ledger {
 	constructor(private readonly deps: LedgerDeps) {}
@@ -188,6 +194,28 @@ export class Ledger {
 			return this.claimOnce(userId, input, true);
 		}
 
+		const forced = best !== undefined;
+		const nonBlocking = forced
+			? evaluation.matches
+			: evaluation.matches.filter((match) => match.confidence === "possible");
+		await store.insertNearMisses(
+			nonBlocking.map(
+				(match): NearMissRow => ({
+					id: newId(),
+					user_id: userId,
+					claim_entry_id: entry.id,
+					matched_entry_id: match.entry.id,
+					via_entry_id: match.via?.id ?? null,
+					match_kind: match.kind,
+					score: match.score,
+					verdict: forced ? "distinct" : "pending",
+					note: forced ? FORCED_NOTE : null,
+					created_at: entry.created_at,
+					decided_at: forced ? entry.created_at : null,
+				}),
+			),
+		);
+
 		let semanticStatus = evaluation.semantic;
 		try {
 			await semantic.upsert([
@@ -202,15 +230,21 @@ export class Ledger {
 			semanticStatus = "unavailable";
 		}
 
-		const forced = best !== undefined;
-		const nonBlocking = forced
-			? evaluation.matches
-			: evaluation.matches.filter((match) => match.confidence === "possible");
+		const matches = nonBlocking.map((match) => toWireMatch(match));
+		if (!forced && matches.length > 0) {
+			return {
+				status: "possible_repeat",
+				entry: toWireEntry(entry),
+				possible_matches: matches,
+				next_step: NEXT_STEP,
+				semantic: semanticStatus,
+			};
+		}
 		return {
 			status: "claimed",
 			entry: toWireEntry(entry),
 			forced,
-			possible_matches: nonBlocking.map((match) => toWireMatch(match)),
+			overridden_matches: matches,
 			semantic: semanticStatus,
 		};
 	}
