@@ -37,8 +37,9 @@ aliasing, read-only scopes, shared/team ledgers. See [Future work](#future-work)
 ## Architecture
 
 One TypeScript Cloudflare Worker, deployed to the custom domain
-**`ledger.twkr.io`**. A Workers custom domain creates a specific DNS record,
-which takes precedence over the existing `*.twkr.io` tunnel wildcard.
+**`ledger.twkr.io`**. The custom domain creates its own Worker-owned DNS record;
+`*.twkr.io` exists only as a tunnel ingress rule (there is no wildcard DNS
+record, verified 2026-09-15), so the homelab tunnel never sees this hostname.
 
 | Route | Purpose | Auth |
 |---|---|---|
