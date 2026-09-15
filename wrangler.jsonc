@@ -15,9 +15,14 @@
 		"GLOBAL_MIN_USERS": "2"
 	},
 	"d1_databases": [
-		{ "binding": "DB", "database_name": "topic-ledger", "migrations_dir": "migrations" }
+		{
+			"binding": "DB",
+			"database_name": "topic-ledger",
+			"database_id": "cd74b563-6804-4580-bf34-47ac0cb9e1aa",
+			"migrations_dir": "migrations"
+		}
 	],
-	"kv_namespaces": [{ "binding": "OAUTH_KV" }],
+	"kv_namespaces": [{ "binding": "OAUTH_KV", "id": "a5715f21a0a44c5f9d0886deff88b031" }],
 	"vectorize": [{ "binding": "VECTORS", "index_name": "topic-ledger-v1" }],
 	"ai": { "binding": "AI" },
 	"ratelimits": [
