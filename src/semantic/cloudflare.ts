@@ -8,9 +8,15 @@ import {
 	UnavailableSemanticIndex,
 } from "./index";
 
-export const EMBEDDING_MODEL = "@cf/google/embeddinggemma-300m";
-export const EMBEDDING_DIMENSIONS = 768;
-const BATCH_SIZE = 100;
+/**
+ * Chosen by calibration (docs/calibration.md). Changing the model requires a new Vectorize index
+ * whose dimensions match EMBEDDING_DIMENSIONS.
+ */
+export const EMBEDDING_MODEL = "@cf/qwen/qwen3-embedding-0.6b";
+export const EMBEDDING_DIMENSIONS = 1024;
+/** The embedding model accepts at most 32 texts per call. */
+const EMBEDDING_BATCH_SIZE = 32;
+const DELETE_BATCH_SIZE = 100;
 
 export class CloudflareSemanticIndex implements SemanticIndex {
 	constructor(
@@ -29,7 +35,7 @@ export class CloudflareSemanticIndex implements SemanticIndex {
 	}
 
 	async upsert(documents: readonly SemanticDocument[]): Promise<void> {
-		for (const batch of chunk(documents, BATCH_SIZE)) {
+		for (const batch of chunk(documents, EMBEDDING_BATCH_SIZE)) {
 			const embeddings = await this.embed(batch.map((doc) => doc.text));
 			await this.vectors.upsert(
 				batch.map((doc, i) => {
@@ -46,17 +52,18 @@ export class CloudflareSemanticIndex implements SemanticIndex {
 	}
 
 	async remove(entryIds: readonly string[]): Promise<void> {
-		for (const batch of chunk(entryIds, BATCH_SIZE)) {
+		for (const batch of chunk(entryIds, DELETE_BATCH_SIZE)) {
 			await this.vectors.deleteByIds(batch);
 		}
 	}
 
 	private async embed(texts: string[]): Promise<number[][]> {
 		const output = await this.ai.run(EMBEDDING_MODEL, { text: texts });
-		if (output.data.length !== texts.length) {
-			throw new Error(`expected ${texts.length} embeddings, got ${output.data.length}`);
+		const data = output.data;
+		if (!data || data.length !== texts.length) {
+			throw new Error(`expected ${texts.length} embeddings, got ${data?.length ?? 0}`);
 		}
-		return output.data;
+		return data;
 	}
 }
 

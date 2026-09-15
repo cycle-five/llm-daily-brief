@@ -8,6 +8,9 @@ import { LedgerStore } from "../src/store/d1";
 import { FakeSemanticIndex } from "./fakes/semantic";
 import { makeTestLedger, seedUser, testStore, uniqueCategory } from "./helpers";
 
+/** Production defaults keep semantic matches advisory; blocking stays configurable. */
+const BLOCKING_THRESHOLDS = { ...DEFAULT_THRESHOLDS, semanticRepeat: 0.85 };
+
 /** Simulates a user with more entries than listCandidates' scan window returns. */
 class NarrowWindowStore extends LedgerStore {
 	override async listCandidates(): Promise<EntryRow[]> {
@@ -83,10 +86,31 @@ describe("Ledger.claim", () => {
 		if (result.status === "repeat") expect(result.matches[0]?.kind).toBe("trigram");
 	});
 
-	it("blocks a semantic repeat at or above the repeat threshold", async () => {
+	it("treats a strong semantic match as advisory under the default thresholds, without a hit", async () => {
+		const semantic = new FakeSemanticIndex();
+		semantic.setSimilarity("Euler's identity", "e^(iπ)+1=0", 0.95);
+		const ledger = makeTestLedger({ semantic });
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const first = await ledger.claim(userId, { category, name: "Euler's identity", force: false });
+		if (first.status !== "claimed") throw new Error("expected claimed");
+
+		const result = await ledger.claim(userId, { category, name: "e^(iπ)+1=0", force: false });
+
+		expect(result.status).toBe("claimed");
+		if (result.status === "claimed") {
+			expect(result.forced).toBe(false);
+			expect(result.possible_matches).toMatchObject([
+				{ entry_id: first.entry.id, kind: "semantic", confidence: "possible", score: 0.95 },
+			]);
+		}
+		expect(await hitCount(userId, category, first.entry.id)).toBe(0);
+	});
+
+	it("blocks a semantic repeat when a repeat threshold is configured", async () => {
 		const semantic = new FakeSemanticIndex();
 		semantic.setSimilarity("Euler's identity", "e^(iπ)+1=0", 0.9);
-		const ledger = makeTestLedger({ semantic });
+		const ledger = makeTestLedger({ semantic, thresholds: BLOCKING_THRESHOLDS });
 		const userId = await seedUser();
 		const category = uniqueCategory();
 		await ledger.claim(userId, { category, name: "Euler's identity", force: false });
@@ -128,10 +152,10 @@ describe("Ledger.claim", () => {
 		expect(await hitCount(userId, category, first.entry.id)).toBe(0);
 	});
 
-	it("force overrides a semantic repeat, returns the overridden matches, and records no hit", async () => {
+	it("force overrides a configured semantic repeat, returns the overridden matches, and records no hit", async () => {
 		const semantic = new FakeSemanticIndex();
 		semantic.setSimilarity("Euler's identity", "Euler's totient", 0.9);
-		const ledger = makeTestLedger({ semantic });
+		const ledger = makeTestLedger({ semantic, thresholds: BLOCKING_THRESHOLDS });
 		const userId = await seedUser();
 		const category = uniqueCategory();
 		const first = await ledger.claim(userId, { category, name: "Euler's identity", force: false });

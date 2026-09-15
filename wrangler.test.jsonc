@@ -6,8 +6,8 @@
 	"compatibility_flags": ["nodejs_compat"],
 	"vars": {
 		"PUBLIC_ORIGIN": "https://ledger.test",
-		"SEMANTIC_REPEAT_THRESHOLD": "0.85",
-		"SEMANTIC_POSSIBLE_THRESHOLD": "0.75",
+		"SEMANTIC_REPEAT_THRESHOLD": "1",
+		"SEMANTIC_POSSIBLE_THRESHOLD": "0.78",
 		"TRIGRAM_REPEAT_THRESHOLD": "0.6",
 		"GLOBAL_MIN_USERS": "2"
 	},

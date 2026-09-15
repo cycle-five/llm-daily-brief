@@ -3,8 +3,8 @@ import { DEFAULT_THRESHOLDS, globalMinUsersFromEnv, thresholdsFromEnv } from "..
 
 const vars = {
 	TRIGRAM_REPEAT_THRESHOLD: "0.6",
-	SEMANTIC_REPEAT_THRESHOLD: "0.85",
-	SEMANTIC_POSSIBLE_THRESHOLD: "0.75",
+	SEMANTIC_REPEAT_THRESHOLD: "1",
+	SEMANTIC_POSSIBLE_THRESHOLD: "0.78",
 	GLOBAL_MIN_USERS: "2",
 };
 
@@ -16,6 +16,14 @@ describe("config", () => {
 		);
 	});
 
+	it("defaults to advisory semantic matching with the calibrated possible threshold", () => {
+		expect(DEFAULT_THRESHOLDS).toEqual({
+			trigramRepeat: 0.6,
+			semanticRepeat: 1,
+			semanticPossible: 0.78,
+		});
+	});
+
 	it("falls back to defaults for blank vars", () => {
 		expect(thresholdsFromEnv({ ...vars, TRIGRAM_REPEAT_THRESHOLD: "" }).trigramRepeat).toBe(0.6);
 	});
@@ -24,7 +32,7 @@ describe("config", () => {
 		expect(() => thresholdsFromEnv({ ...vars, TRIGRAM_REPEAT_THRESHOLD: "high" })).toThrow(
 			/TRIGRAM_REPEAT_THRESHOLD/,
 		);
-		expect(() => thresholdsFromEnv({ ...vars, SEMANTIC_POSSIBLE_THRESHOLD: "0.95" })).toThrow(
+		expect(() => thresholdsFromEnv({ ...vars, SEMANTIC_REPEAT_THRESHOLD: "0.7" })).toThrow(
 			/SEMANTIC_POSSIBLE_THRESHOLD/,
 		);
 	});

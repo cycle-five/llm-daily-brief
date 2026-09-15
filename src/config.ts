@@ -1,10 +1,15 @@
 import type { Thresholds } from "./core/match";
 import type { Env } from "./env";
 
+/**
+ * Semantic defaults come from docs/calibration.md: no embedding model separates rephrasings from
+ * lookalike topics, so semantic matches are advisory (repeat threshold 1 never blocks) and the
+ * possible threshold surfaces every calibrated rephrasing for the caller to judge.
+ */
 export const DEFAULT_THRESHOLDS: Thresholds = {
 	trigramRepeat: 0.6,
-	semanticRepeat: 0.85,
-	semanticPossible: 0.75,
+	semanticRepeat: 1,
+	semanticPossible: 0.78,
 };
 
 const DEFAULT_GLOBAL_MIN_USERS = 2;

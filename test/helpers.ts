@@ -5,6 +5,7 @@ import { base64UrlEncode } from "../src/auth/encoding";
 import { createPersonalToken } from "../src/auth/tokens";
 import { DEFAULT_THRESHOLDS } from "../src/config";
 import { Ledger } from "../src/core/ledger";
+import type { Thresholds } from "../src/core/match";
 import { normalize } from "../src/core/normalize";
 import type { EntryRow, HitRow } from "../src/core/rows";
 import { providerOptions } from "../src/index";
@@ -71,12 +72,12 @@ export function makeHit(
 }
 
 export function makeTestLedger(
-	options: { semantic?: SemanticIndex; now?: () => number } = {},
+	options: { semantic?: SemanticIndex; now?: () => number; thresholds?: Thresholds } = {},
 ): Ledger {
 	return new Ledger({
 		store: testStore(),
 		semantic: options.semantic ?? new FakeSemanticIndex(),
-		thresholds: DEFAULT_THRESHOLDS,
+		thresholds: options.thresholds ?? DEFAULT_THRESHOLDS,
 		now: options.now ?? (() => Date.now()),
 		newId: () => crypto.randomUUID(),
 	});

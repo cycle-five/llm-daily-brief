@@ -1,7 +1,11 @@
 import { z } from "zod";
+import { chunk } from "../src/core/chunk.ts";
 import { PAIRS } from "./calibration-pairs.ts";
 
-const MODEL = "@cf/google/embeddinggemma-300m";
+/** Keep in sync with EMBEDDING_MODEL in src/semantic/cloudflare.ts. */
+const MODEL = "@cf/qwen/qwen3-embedding-0.6b";
+/** The embedding model accepts at most 32 texts per call. */
+const BATCH_SIZE = 32;
 
 const AiRunResponse = z.object({
 	success: z.boolean(),
@@ -34,6 +38,12 @@ async function embed(texts: string[]): Promise<number[][]> {
 	return body.result.data;
 }
 
+async function embedAll(texts: string[]): Promise<number[][]> {
+	const out: number[][] = [];
+	for (const batch of chunk(texts, BATCH_SIZE)) out.push(...(await embed(batch)));
+	return out;
+}
+
 function cosine(a: number[], b: number[]): number {
 	let dot = 0;
 	let normA = 0;
@@ -50,7 +60,7 @@ function cosine(a: number[], b: number[]): number {
 
 const texts = [...new Set(PAIRS.flatMap((pair) => [pair.a, pair.b]))];
 const vectors = new Map<string, number[]>();
-const embeddings = await embed(texts);
+const embeddings = await embedAll(texts);
 texts.forEach((text, i) => {
 	const vector = embeddings[i];
 	if (!vector) throw new Error(`no embedding returned for ${text}`);
@@ -73,8 +83,10 @@ const maxDifferent = Math.max(...differentScores);
 console.log(`\nmin SAME score:      ${minSame.toFixed(3)}`);
 console.log(`max different score: ${maxDifferent.toFixed(3)}`);
 console.log(
-	`suggested SEMANTIC_REPEAT_THRESHOLD   = ${(Math.ceil((maxDifferent + 0.005) * 100) / 100).toFixed(2)} (just above every different pair)`,
+	`suggested SEMANTIC_POSSIBLE_THRESHOLD = ${(Math.floor(minSame * 100) / 100).toFixed(2)} (surfaces every SAME pair as a possible match for the brief to judge)`,
 );
 console.log(
-	`suggested SEMANTIC_POSSIBLE_THRESHOLD = ${(Math.floor(Math.min(minSame, maxDifferent) * 100) / 100).toFixed(2)} (surface borderline pairs for the LLM)`,
+	minSame > maxDifferent
+		? `SAME and different pairs separate: SEMANTIC_REPEAT_THRESHOLD could be ${(Math.ceil((maxDifferent + 0.005) * 100) / 100).toFixed(2)}`
+		: "SAME and different pairs overlap: keep SEMANTIC_REPEAT_THRESHOLD = 1 so semantic matches stay advisory",
 );

@@ -9,8 +9,8 @@
 	"observability": { "enabled": true },
 	"vars": {
 		"PUBLIC_ORIGIN": "https://ledger.twkr.io",
-		"SEMANTIC_REPEAT_THRESHOLD": "0.85",
-		"SEMANTIC_POSSIBLE_THRESHOLD": "0.75",
+		"SEMANTIC_REPEAT_THRESHOLD": "1",
+		"SEMANTIC_POSSIBLE_THRESHOLD": "0.78",
 		"TRIGRAM_REPEAT_THRESHOLD": "0.6",
 		"GLOBAL_MIN_USERS": "2"
 	},
@@ -23,7 +23,7 @@
 		}
 	],
 	"kv_namespaces": [{ "binding": "OAUTH_KV", "id": "a5715f21a0a44c5f9d0886deff88b031" }],
-	"vectorize": [{ "binding": "VECTORS", "index_name": "topic-ledger-v1" }],
+	"vectorize": [{ "binding": "VECTORS", "index_name": "topic-ledger-v2" }],
 	"ai": { "binding": "AI" },
 	"ratelimits": [
 		{ "name": "CLAIM_LIMITER", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } }
