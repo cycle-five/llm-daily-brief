@@ -2,9 +2,11 @@
 
 A small multi-user service that keeps an LLM daily brief from repeating itself.
 Before the brief writes about a math topic or a historical figure, it *claims* the
-topic here. Repeats — including rephrasings like "Euler's identity" vs
-"e^(iπ)+1=0" — are refused, and every refused attempt is counted, so you can see
-which topics the model keeps wanting to come back to.
+topic here. Exact repeats and spelling variants are refused, and every refused
+attempt is counted, so you can see which topics the model keeps wanting to come
+back to. Rephrasings — like "Euler's identity" vs "e^(iπ)+1=0" — come back as
+`possible_matches` for the brief to judge (see [`docs/calibration.md`](docs/calibration.md)
+for why meaning-based matches are advisory rather than blocking).
 
 - **MCP** (claude.ai connectors, openclaw): `https://ledger.twkr.io/mcp`
 - **REST** (cron, scripts): `https://ledger.twkr.io/api/v1`
@@ -64,11 +66,12 @@ Account: Cycle Five Syndicate (`e24f723fe819bea445d08ab472d549f6`), which owns t
 ```sh
 npx wrangler d1 create topic-ledger                 # put database_id into wrangler.jsonc
 npx wrangler kv namespace create topic-ledger-oauth # put id into wrangler.jsonc
-npx wrangler vectorize create topic-ledger-v1 --dimensions=768 --metric=cosine
+# Dimensions must match EMBEDDING_DIMENSIONS for @cf/qwen/qwen3-embedding-0.6b:
+npx wrangler vectorize create topic-ledger-v2 --dimensions=1024 --metric=cosine
 # Metadata indexes MUST exist before the first vector is inserted:
-npx wrangler vectorize create-metadata-index topic-ledger-v1 --property-name=user_id --type=string
-npx wrangler vectorize create-metadata-index topic-ledger-v1 --property-name=category --type=string
-npx wrangler vectorize list-metadata-index topic-ledger-v1
+npx wrangler vectorize create-metadata-index topic-ledger-v2 --property-name=user_id --type=string
+npx wrangler vectorize create-metadata-index topic-ledger-v2 --property-name=category --type=string
+npx wrangler vectorize list-metadata-index topic-ledger-v2
 ```
 
 OAuth apps:
@@ -86,8 +89,8 @@ gh secret set CLOUDFLARE_API_TOKEN     # Workers, D1, KV, Vectorize, AI, zone DN
 gh secret set CLOUDFLARE_ACCOUNT_ID
 ```
 
-Calibrate the semantic thresholds against real embeddings and record the output in
-`docs/calibration.md`:
+Semantic thresholds were calibrated against real embeddings; the method, results and
+chosen values are in [`docs/calibration.md`](docs/calibration.md). To re-run the pair set:
 
 ```sh
 CLOUDFLARE_ACCOUNT_ID=... CLOUDFLARE_API_TOKEN=... node scripts/calibrate.ts

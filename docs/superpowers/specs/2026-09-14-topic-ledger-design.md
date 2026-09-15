@@ -3,6 +3,8 @@
 - **Date:** 2026-09-14
 - **Status:** Design approved in brainstorming; awaiting spec review
 - **Branch:** `feat/topic-ledger`
+- **Amended 2026-09-15:** embedding model and semantic thresholds changed after calibration
+  (`docs/calibration.md`); semantic matches are advisory by default.
 
 ## Problem
 
@@ -17,8 +19,9 @@ cron), with OAuth.
 
 ## Goals
 
-1. Block repeats per user and per category, using fuzzy matching that catches
-   spelling variants and rephrasings.
+1. Block repeats per user and per category: exact and spelling-variant matches
+   block; likely rephrasings are surfaced as possible matches for the caller to
+   judge (see `docs/calibration.md`).
 2. Record every blocked repeat ("hit"), with the phrasing that was attempted.
 3. Serve MCP (claude.ai connectors, openclaw) and REST (cron, scripts) from one
    core, with identical semantics.
@@ -50,8 +53,8 @@ which takes precedence over the existing `*.twkr.io` tunnel wildcard.
 | Binding | Resource | Notes |
 |---|---|---|
 | `DB` | D1 `topic-ledger` | Source of truth |
-| `VECTORS` | Vectorize `topic-ledger-v1` | 768 dims, cosine; metadata indexes `user_id`, `category` (string) |
-| `AI` | Workers AI | `@cf/google/embeddinggemma-300m` |
+| `VECTORS` | Vectorize `topic-ledger-v2` | 1024 dims, cosine; metadata indexes `user_id`, `category` (string) |
+| `AI` | Workers AI | `@cf/qwen/qwen3-embedding-0.6b` (at most 32 texts per call) |
 | `OAUTH_KV` | KV `topic-ledger-oauth` | Required by the OAuth provider; also holds sign-in state |
 | `CLAIM_LIMITER` | Rate limit | 60 requests / 60 s, keyed by user id |
 | cron | `*/15 * * * *` | Backfills pending embeddings |
@@ -59,9 +62,10 @@ which takes precedence over the existing `*.twkr.io` tunnel wildcard.
 Vectorize metadata indexes **must be created before any vector is inserted**;
 vectors inserted earlier are not filterable on those fields.
 
-Vars: `SEMANTIC_REPEAT_THRESHOLD` (default `0.85`),
-`SEMANTIC_POSSIBLE_THRESHOLD` (default `0.75`), `TRIGRAM_REPEAT_THRESHOLD`
-(default `0.6`), `GLOBAL_MIN_USERS` (default `2`).
+Vars: `SEMANTIC_REPEAT_THRESHOLD` (default `1`, i.e. semantic matches never block),
+`SEMANTIC_POSSIBLE_THRESHOLD` (default `0.78`), `TRIGRAM_REPEAT_THRESHOLD`
+(default `0.6`), `GLOBAL_MIN_USERS` (default `2`). Semantic defaults come from
+`docs/calibration.md`.
 
 Secrets: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GOOGLE_CLIENT_ID`,
 `GOOGLE_CLIENT_SECRET`, `COOKIE_SECRET`.
@@ -197,6 +201,13 @@ Every lookup is scoped to one `(user_id, lowercased category)`.
    - score ≥ `SEMANTIC_REPEAT_THRESHOLD` → **repeat** confidence
    - `SEMANTIC_POSSIBLE_THRESHOLD` ≤ score < repeat threshold → **possible**
      confidence (reported, never blocks)
+
+   Calibration (2026-09-15) found that no available Workers AI embedding model
+   separates rephrasings from distinct topics that share a name (e.g. "Four color
+   theorem" vs "Five color theorem" scores above "Euler's identity" vs
+   "e^(iπ) + 1 = 0"). The defaults therefore make semantic matches advisory:
+   repeat threshold `1`, possible threshold `0.78`, which surfaces every calibrated
+   rephrasing for the caller (the brief's LLM) to judge and forget if needed.
 
 ### Decision
 
@@ -498,7 +509,7 @@ one batch, upsert vectors, mark `indexed`. Failures leave rows `pending`.
    no Workers, D1 databases, KV namespaces or Vectorize indexes at that time, so
    the names above are free. Scope `CLOUDFLARE_API_TOKEN` to this account.
 2. Create D1 `topic-ledger`, KV `topic-ledger-oauth`, and Vectorize
-   `topic-ledger-v1` (768, cosine).
+   `topic-ledger-v2` (1024, cosine).
 3. Create Vectorize metadata indexes `user_id` and `category` (string) —
    **before** any insert.
 4. Create a GitHub OAuth app (callback `https://ledger.twkr.io/callback/github`)
@@ -525,7 +536,7 @@ Connectors with URL `https://ledger.twkr.io/mcp`.
 
 | Risk | Mitigation |
 |---|---|
-| Semantic thresholds are guesses | Calibration script gates the first release tag |
+| Embeddings can't separate rephrasings from lookalike topics | Calibrated 2026-09-15 (`docs/calibration.md`): semantic matches are advisory `possible_matches`; exact and trigram still block |
 | Deploy token scoped to the wrong account (custom domains require the zone's account) | `twkr.io` confirmed on Cycle Five Syndicate; `CLOUDFLARE_ACCOUNT_ID` pinned to it |
 | Unattended scheduled runs lose auth | `refreshTokenTTL: undefined` passed explicitly (library default is 30 days); unit-tested |
 | New, fast-moving libraries (OAuth provider, MCP SDK v2, Agents SDK) | Exact version pins; integration tests cover both transports |
