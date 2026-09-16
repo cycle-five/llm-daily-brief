@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { createSession, SESSION_COOKIE } from "../src/auth/session";
 import { providerOptions } from "../src/index";
 import { createWebApp } from "../src/web/app";
+import { FakeSemanticIndex } from "./fakes/semantic";
 import {
 	issueOAuthTokens,
 	makeTestLedger,
@@ -160,6 +161,60 @@ describe("connect page", () => {
 		const html = await (await get("/connect", await sessionCookie(await seedUser()))).text();
 		expect(html).toContain(`${ORIGIN}/mcp`);
 		expect(html).toContain("claim_topic");
+		expect(html).toContain("skip_topic");
+		expect(html).toContain("keep_topic");
+		expect(html).not.toContain("forget_topic");
+	});
+});
+
+describe("near misses page", () => {
+	it("labels every verdict, shows via aliases, and lists aliases on the ledger", async () => {
+		const userId = await seedUser();
+		const cookie = await sessionCookie(userId);
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeTestLedger({ semantic });
+		const category = uniqueCategory();
+		const claim = (name: string) => ledger.claim(userId, { category, name, force: false });
+
+		const haytham = await claim("Ibn al-Haytham");
+		if (haytham.status !== "claimed") throw new Error("expected claimed");
+
+		semantic.setSimilarity("Ibn al-Haytham", "Omar Khayyam", 0.81);
+		const khayyam = await claim("Omar Khayyam");
+		if (khayyam.status !== "possible_repeat") throw new Error("expected possible_repeat");
+		await ledger.keep(userId, { entry_id: khayyam.entry.id, note: "different people" });
+
+		semantic.setSimilarity("Ibn al-Haytham", "Alhazen", 0.9);
+		semantic.setSimilarity("Omar Khayyam", "Alhazen", 0.79);
+		const alhazen = await claim("Alhazen");
+		if (alhazen.status !== "possible_repeat") throw new Error("expected possible_repeat");
+		await ledger.skip(userId, { entry_id: alhazen.entry.id, repeat_of: haytham.entry.id });
+
+		semantic.setSimilarity("Alhazen", "Father of optics", 0.85);
+		const optics = await claim("Father of optics");
+		if (optics.status !== "possible_repeat") throw new Error("expected possible_repeat");
+
+		const html = await (await get("/near-misses", cookie)).text();
+		for (const text of [
+			"Repeat — skipped",
+			"Different — kept",
+			"No verdict — used",
+			"Not judged — claim skipped",
+			"via Alhazen",
+			"different people",
+			'href="/near-misses"',
+		]) {
+			expect(html).toContain(text);
+		}
+
+		const ledgerHtml = await (await get("/ledger", cookie)).text();
+		expect(ledgerHtml).toContain("also claimed as: Alhazen");
+		expect(ledgerHtml).not.toContain(`/entries/${alhazen.entry.id}/forget`);
+	});
+
+	it("shows an empty state", async () => {
+		const html = await (await get("/near-misses", await sessionCookie(await seedUser()))).text();
+		expect(html).toContain("No near misses yet.");
 	});
 });
 

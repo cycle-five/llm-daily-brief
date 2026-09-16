@@ -7,10 +7,10 @@ import { SESSION_COOKIE } from "../auth/session";
 import { createPersonalToken } from "../auth/tokens";
 import { globalMinUsersFromEnv } from "../config";
 import { LedgerError } from "../core/errors";
-import type { TokenRow } from "../core/rows";
+import type { EntryRow, TokenRow } from "../core/rows";
 import { toIso } from "../core/wire";
 import { ledgerFromEnv } from "../services";
-import { LedgerStore, type UserRepeatRow } from "../store/d1";
+import { LedgerStore, type NearMissView, type UserRepeatRow } from "../store/d1";
 import { currentUserId, isSameOrigin, type WebDeps, type WebEnv } from "./guards";
 import { ErrorPage, Layout, render } from "./layout";
 import { BRIEF_PROMPT_SNIPPET } from "./prompt";
@@ -42,7 +42,7 @@ function LandingPage() {
 	);
 }
 
-function LedgerPage(props: { entries: Entry[] }) {
+function LedgerPage(props: { entries: Entry[]; aliases: ReadonlyMap<string, string[]> }) {
 	return (
 		<Layout title="Ledger" signedIn>
 			<h1>Ledger</h1>
@@ -62,23 +62,97 @@ function LedgerPage(props: { entries: Entry[] }) {
 						</tr>
 					</thead>
 					<tbody>
-						{props.entries.map((entry) => (
+						{props.entries.map((entry) => {
+							const aliases = props.aliases.get(entry.id) ?? [];
+							return (
+								<tr>
+									<td>
+										{entry.display_name}
+										{aliases.length > 0 ? (
+											<>
+												<br />
+												<small>{`also claimed as: ${aliases.join(", ")}`}</small>
+											</>
+										) : null}
+									</td>
+									<td>{entry.category}</td>
+									<td>{entry.created_at.slice(0, 10)}</td>
+									<td>{entry.hit_count}</td>
+									<td>
+										<form class="inline" method="post" action={`/entries/${entry.id}/forget`}>
+											<button type="submit">Forget</button>
+										</form>
+									</td>
+								</tr>
+							);
+						})}
+					</tbody>
+				</table>
+			)}
+			<p>Showing the newest {PAGE_LIMIT} topics.</p>
+		</Layout>
+	);
+}
+
+function aliasNamesByOriginal(aliases: readonly EntryRow[]): Map<string, string[]> {
+	const names = new Map<string, string[]>();
+	for (const alias of aliases) {
+		if (alias.alias_of === null) continue;
+		names.set(alias.alias_of, [...(names.get(alias.alias_of) ?? []), alias.display_name]);
+	}
+	return names;
+}
+
+function verdictLabel(row: NearMissView): string {
+	if (row.verdict === "repeat") return "Repeat — skipped";
+	if (row.verdict === "distinct") return "Different — kept";
+	return row.claim_alias_of === null ? "No verdict — used" : "Not judged — claim skipped";
+}
+
+function NearMissesPage(props: { rows: NearMissView[] }) {
+	return (
+		<Layout title="Near misses" signedIn>
+			<h1>Near misses</h1>
+			<p>Earlier topics a claim resembled closely enough to ask the brief for a verdict.</p>
+			{props.rows.length === 0 ? (
+				<p>No near misses yet.</p>
+			) : (
+				<table>
+					<thead>
+						<tr>
+							<th>Date</th>
+							<th>Claimed</th>
+							<th>Matched</th>
+							<th>Match</th>
+							<th>Score</th>
+							<th>Verdict</th>
+							<th>Note</th>
+						</tr>
+					</thead>
+					<tbody>
+						{props.rows.map((row) => (
 							<tr>
-								<td>{entry.display_name}</td>
-								<td>{entry.category}</td>
-								<td>{entry.created_at.slice(0, 10)}</td>
-								<td>{entry.hit_count}</td>
+								<td>{toIso(row.created_at).slice(0, 10)}</td>
+								<td>{row.claim_name}</td>
 								<td>
-									<form class="inline" method="post" action={`/entries/${entry.id}/forget`}>
-										<button type="submit">Forget</button>
-									</form>
+									{row.matched_name} <small>{`(${row.category})`}</small>
+									{row.via_name === null ? null : (
+										<>
+											<br />
+											<small>{`via ${row.via_name}`}</small>
+										</>
+									)}
 								</td>
+								<td>{row.match_kind}</td>
+								<td>{row.score.toFixed(2)}</td>
+								<td>{verdictLabel(row)}</td>
+								<td>{row.note ?? ""}</td>
 							</tr>
 						))}
 					</tbody>
 				</table>
 			)}
-			<p>Showing the newest {PAGE_LIMIT} topics.</p>
+			<p>Showing the newest {PAGE_LIMIT} near misses.</p>
 		</Layout>
 	);
 }
@@ -310,7 +384,11 @@ export function registerDashboardRoutes(app: Hono<WebEnv>, deps: WebDeps): void 
 		"/ledger",
 		page(async (c, userId) => {
 			const { entries } = await ledgerFromEnv(c.env).list(userId, { limit: PAGE_LIMIT });
-			return render(c, <LedgerPage entries={entries} />);
+			const aliases = await new LedgerStore(c.env.DB).listAliases(
+				userId,
+				entries.map((entry) => entry.id),
+			);
+			return render(c, <LedgerPage entries={entries} aliases={aliasNamesByOriginal(aliases)} />);
 		}),
 	);
 
@@ -331,6 +409,14 @@ export function registerDashboardRoutes(app: Hono<WebEnv>, deps: WebDeps): void 
 		page(async (c, userId) => {
 			const rows = await new LedgerStore(c.env.DB).topRepeatsForUser(userId, undefined, PAGE_LIMIT);
 			return render(c, <MyRepeatsPage rows={rows} />);
+		}),
+	);
+
+	app.get(
+		"/near-misses",
+		page(async (c, userId) => {
+			const rows = await new LedgerStore(c.env.DB).listNearMisses(userId, PAGE_LIMIT);
+			return render(c, <NearMissesPage rows={rows} />);
 		}),
 	);
 

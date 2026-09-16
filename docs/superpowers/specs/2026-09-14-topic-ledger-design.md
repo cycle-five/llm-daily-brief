@@ -50,7 +50,7 @@ record, verified 2026-09-15), so the homelab tunnel never sees this hostname.
 | `/api/v1/*` | REST API (Hono) | OAuth bearer or personal token |
 | `/authorize`, `/token`, `/register`, `/.well-known/*` | OAuth 2.1 + dynamic client registration (`@cloudflare/workers-oauth-provider`) | — |
 | `/login/:provider`, `/callback/:provider` | GitHub / Google upstream sign-in | — |
-| `/`, `/ledger`, `/repeats`, `/global`, `/access`, `/connect`, `/account` | Dashboard (Hono JSX, server-rendered) | Session cookie |
+| `/`, `/ledger`, `/repeats`, `/near-misses`, `/global`, `/access`, `/connect`, `/account` | Dashboard (Hono JSX, server-rendered) | Session cookie |
 
 ### Bindings
 
@@ -211,7 +211,7 @@ Every lookup is scoped to one `(user_id, lowercased category)`.
    theorem" vs "Five color theorem" scores above "Euler's identity" vs
    "e^(iπ) + 1 = 0"). The defaults therefore make semantic matches advisory:
    repeat threshold `1`, possible threshold `0.78`, which surfaces every calibrated
-   rephrasing for the caller (the brief's LLM) to judge and forget if needed.
+   rephrasing for the caller (the brief's LLM) to judge with `skip_topic` or `keep_topic`.
 
 ### Decision
 
@@ -237,7 +237,9 @@ One core (`core/ledger.ts`) exposed identically over MCP and REST.
 | claim | `claim_topic` | `POST /api/v1/claims` |
 | check | `check_topic` | `POST /api/v1/checks` |
 | list | `list_topics` | `GET /api/v1/entries?category=&limit=&since=` |
-| forget | `forget_topic` | `DELETE /api/v1/entries/:id` |
+| skip | `skip_topic` | `POST /api/v1/entries/:id/skip` |
+| keep | `keep_topic` | `POST /api/v1/entries/:id/keep` |
+| forget | *(none)* | `DELETE /api/v1/entries/:id` |
 | stats | `topic_stats` | `GET /api/v1/stats?scope=me\|global&category=&limit=` |
 
 ### Wire types
@@ -254,6 +256,7 @@ interface Match {
   confidence: "repeat" | "possible";
   first_seen: string;                  // ISO 8601
   hit_count: number;
+  via_alias?: string;                  // alias that matched, if any
 }
 
 interface Entry {
@@ -268,9 +271,11 @@ type SemanticStatus = "ok" | "unavailable";
 
 // claim
 interface ClaimInput { category: string; name: string; force?: boolean }
-type ClaimResult =
+type ClaimResult =                     // see the near-misses spec
   | { status: "claimed"; entry: Entry; forced: boolean;
-      possible_matches: Match[]; semantic: SemanticStatus }
+      overridden_matches: Match[]; semantic: SemanticStatus }
+  | { status: "possible_repeat"; entry: Entry; possible_matches: Match[];
+      next_step: string; semantic: SemanticStatus }
   | { status: "repeat"; matches: Match[]; semantic: SemanticStatus };
 
 // check
@@ -309,12 +314,12 @@ default 20.
    lowercased `category`). On success set `vector_status = 'indexed'`; on
    failure leave it `pending` for the cron backfill and return
    `semantic: "unavailable"`.
-5. Return `claimed`. `possible_matches` holds every match that did not block the
-   claim: possible-confidence matches normally, or all matches when `forced`.
+5. Record a near miss per non-blocking match, then return `possible_repeat` when unforced
+   possible matches exist, otherwise `claimed` (see the near-misses spec).
 
 ### Hit semantics
 
-A **hit** is recorded only by `claim` when it returns `repeat`. `check`, `list`,
+A **hit** is recorded by `claim` when it returns `repeat`, and by `skip`. `check`, `list`,
 `stats` and dashboard browsing never record hits. Repeated attempts at the same
 topic record one hit each — each is a separate "wanted to repeat" signal.
 
@@ -322,7 +327,7 @@ topic record one hit each — each is a separate "wanted to repeat" signal.
 
 Deletes the D1 entry (hits cascade), then deletes the vector. A failed vector
 delete is logged and otherwise ignored, because semantic results are joined
-against D1.
+against D1. It also removes the entry's aliases (with their vectors) and near misses, and is not exposed over MCP.
 
 ### stats
 
@@ -413,7 +418,8 @@ Server-rendered Hono JSX; no SPA and no frontend build step.
 | Page | Contents |
 |---|---|
 | `/` | Sign-in buttons, or redirect to `/ledger` when signed in |
-| `/ledger` | Entries by category and date; forget button |
+| `/ledger` | Original topics by category and date, with their aliases; forget button |
+| `/near-misses` | Possible matches claims surfaced, with verdicts and notes |
 | `/repeats` | The user's entries ranked by hits; expand to see each hit's phrasing, kind and score |
 | `/global` | Global leaderboard (topics hit by ≥ `GLOBAL_MIN_USERS` users) |
 | `/access` | Create/revoke personal tokens; list/revoke OAuth grants (`listUserGrants`, `revokeGrant`) |
@@ -528,10 +534,11 @@ one batch, upsert vectors, mark `indexed`. Failures leave rows `pending`.
 
 > Before writing the math section, choose a topic and call `claim_topic` with
 > category `math` and the topic's common name. If the result is `repeat`, choose
-> a different topic and call again, up to 5 times. If the result is `claimed`
-> but lists `possible_matches` you judge to be the same topic, call
-> `forget_topic` on the new entry and choose again. Do the same with category
-> `person` for the historical figure.
+> a different topic and call again, up to 5 times. If the result is
+> `possible_repeat`, decide whether your topic is the same as any listed match:
+> if it is, call `skip_topic` with `repeat_of` set to that match's `entry_id` and
+> choose again; if not, call `keep_topic`. Include a short note with either call.
+> Do the same with category `person` for the historical figure.
 
 The claude.ai scheduled task uses the connector added under Settings →
 Connectors with URL `https://ledger.twkr.io/mcp`.
@@ -540,7 +547,7 @@ Connectors with URL `https://ledger.twkr.io/mcp`.
 
 | Risk | Mitigation |
 |---|---|
-| Embeddings can't separate rephrasings from lookalike topics | Calibrated 2026-09-15 (`docs/calibration.md`): semantic matches are advisory `possible_matches`; exact and trigram still block |
+| Embeddings can't separate rephrasings from lookalike topics | Calibrated 2026-09-15 (`docs/calibration.md`): semantic matches return `possible_repeat` and the brief gives a verdict; exact and trigram still block |
 | Deploy token scoped to the wrong account (custom domains require the zone's account) | `twkr.io` confirmed on Cycle Five Syndicate; `CLOUDFLARE_ACCOUNT_ID` pinned to it |
 | Unattended scheduled runs lose auth | `refreshTokenTTL: undefined` passed explicitly (library default is 30 days); unit-tested |
 | New, fast-moving libraries (OAuth provider, MCP SDK v2, Agents SDK) | Exact version pins; integration tests cover both transports |

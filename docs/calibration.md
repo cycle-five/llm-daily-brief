@@ -4,7 +4,7 @@
 - **Account:** Cycle Five Syndicate, live Workers AI (`/ai/run`), cosine similarity
 - **Decision:** embedding model `@cf/qwen/qwen3-embedding-0.6b` (1024 dims, Vectorize
   index `topic-ledger-v2`); `SEMANTIC_REPEAT_THRESHOLD = 1` (semantic matches never block);
-  `SEMANTIC_POSSIBLE_THRESHOLD = 0.78` (surfaced as `possible_matches` for the brief to judge)
+  `SEMANTIC_POSSIBLE_THRESHOLD = 0.78` (surfaced as `possible_repeat` for the brief to judge with `skip_topic` or `keep_topic`)
 
 ## Why semantic matches are advisory
 
@@ -17,8 +17,9 @@ Across every text-embedding model Workers AI offers, distinct topics that share 
 (Four vs Five color theorem, Marie vs Pierre Curie, Fermat's Last vs little theorem) score
 **above** genuine rephrasings (formula forms, full names). No single threshold can block
 rephrasings without also blocking legitimate new topics. Exact and trigram matching still
-block; semantic similarity instead surfaces candidates, and the brief's prompt tells the LLM
-to `forget_topic` a new entry it judges to be the same topic.
+block; semantic similarity instead returns `possible_repeat`,
+and the brief's LLM answers with `skip_topic` (same topic: counted as a repeat, and the phrasing
+becomes an alias that exact matching refuses next time) or `keep_topic`.
 
 ## Method
 
@@ -122,7 +123,7 @@ Pairs at or above each candidate possible threshold:
   unrelated pair 0.045 below it. A rephrasing phrased differently from the calibration set can
   still fall under 0.78 and be claimed without any match.
 - The pair set is small (36 pairs). Re-run after changing the model, and extend
-  `scripts/calibration-pairs.ts` with real near-misses seen in `/repeats` over time.
+  `scripts/calibration-pairs.ts` with real pairs and verdicts from the dashboard's Near misses page (`/near-misses`).
 
 ## Re-running
 
