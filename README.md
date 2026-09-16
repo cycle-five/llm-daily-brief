@@ -39,18 +39,20 @@ Create a token on the dashboard's **Access** page, then:
 curl -X POST https://ledger.twkr.io/api/v1/claims \
   -H "Authorization: Bearer ldg_YOUR_TOKEN" \
   -H "content-type: application/json" \
-  -d '{"category":"math","name":"Euler identity"}'
+  -d '{"category":"math","name":"Euler identity","model":"cron"}'
 ```
 
 | Method | Path | Body / query | Result |
 |---|---|---|---|
-| POST | `/api/v1/claims` | `{category, name, force?}` | `{status: "claimed", entry, forced, overridden_matches, semantic}`, `{status: "possible_repeat", entry, possible_matches, next_step, semantic}` or `{status: "repeat", matches, semantic}` |
-| POST | `/api/v1/checks` | `{category, name}` | `{likely_repeat, matches, semantic}` (records nothing) |
-| GET | `/api/v1/entries` | `?category=&limit=&since=` | `{entries}` (original topics only) |
+| POST | `/api/v1/claims` | `{category, name, force?, model?, model_version?}` | `{status: "claimed", entry, forced, overridden_matches, semantic}`, `{status: "possible_repeat", entry, possible_matches, next_step, semantic}` or `{status: "repeat", matches, semantic}` |
+| POST | `/api/v1/checks` | `{category, name, model?}` | `{likely_repeat, matches, semantic}` (records nothing) |
+| GET | `/api/v1/entries` | `?category=&limit=&since=&model=` | `{entries}` (original topics only; each carries its `model`) |
 | POST | `/api/v1/entries/:id/skip` | `{repeat_of, note?}` | `{skipped, alias_of}`: the entry becomes an alias of `repeat_of` and a hit is recorded |
 | POST | `/api/v1/entries/:id/keep` | `{note?}` | `{kept, distinct}` |
 | DELETE | `/api/v1/entries/:id` | — | 204; erases the topic with its hits, aliases and near misses |
-| GET | `/api/v1/stats` | `?scope=me\|global&category=&limit=` | `{scope, repeats}` |
+| GET | `/api/v1/stats` | `?scope=me\|global&category=&limit=&model=` | `{scope, repeats}` |
+
+`model` defaults to the token's label. Model filters compare case-insensitively.
 
 Errors are `{error: {code, message}}` with codes `unauthorized` (401),
 `invalid_input` (400), `not_found` (404), `rate_limited` (429),
@@ -95,6 +97,29 @@ Vectorize takes time to make a new vector queryable. A rephrasing claimed a seco
 original can match nothing, while the same pair scores 0.90 a couple of minutes later. Seed the
 originals, wait, then claim the rephrasings; `check_topic` is a free readiness gate because it
 records nothing. Real briefs claim days apart, so this affects only hand-testing.
+
+## Models
+
+Every claim records the model that made it. Over MCP, `claim_topic` and `check_topic` require
+`model`: the model's family name, such as `Claude`, `Grok` or `Gemini`, never a version, because it
+decides which ledger the claim is checked against. An optional `model_version` ("Opus 5") is kept as
+a label. Over REST, `model` defaults to the token's label. Model names compare case-insensitively.
+
+**Share one ledger across all my models** is a switch on the dashboard's **Account** page, on by
+default:
+
+- **On:** every claim is checked against every topic on your account, whichever model claimed it.
+  Repeats block and possible repeats ask for a verdict, as described above; the hit records which
+  model was blocked.
+- **Off:** each model is blocked only by its own topics. A match against another model's topic
+  never blocks and never asks: it is recorded as an **overlap** with its match type and score.
+
+Topics claimed before models were recorded have no model, and count as belonging to every model.
+
+The **Overlaps** page lists exact and spelling matches between models, with meaning-only matches
+in a separate *Similar, unverified* section, or as one combined list. The **Repeats** page opens
+with a per-model summary. Its repeat rate is repeats over attempts: every attempt ends as a kept
+topic, a blocked repeat or a skip, so the rate is `hits / (topics + hits)`.
 
 ## Development
 
