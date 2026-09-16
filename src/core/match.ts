@@ -104,3 +104,40 @@ export function rankMatches(matches: readonly ScoredMatch[]): ScoredMatch[] {
 export function isLikelyRepeat(matches: readonly ScoredMatch[]): boolean {
 	return matches.some((match) => match.confidence === "repeat");
 }
+
+/** Case-insensitive model equality with ASCII-only folding, matching SQLite's NOCASE collation. */
+export function sameModel(a: string, b: string): boolean {
+	return foldAscii(a) === foldAscii(b);
+}
+
+function foldAscii(value: string): string {
+	return value.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
+export interface ScopedMatches {
+	/** Matches in the caller's ledger: they can block or ask for a verdict. */
+	inScope: ScoredMatch[];
+	/** Matches on another model's topics while ledgers are separate: recorded as overlaps. */
+	crossModel: ScoredMatch[];
+}
+
+/**
+ * Splits resolved matches by ledger. With a shared ledger, or when the caller declared no model,
+ * every match is in scope. Otherwise a match is in scope when its entry (an original, after alias
+ * resolution) is unattributed or belongs to the caller's model.
+ */
+export function splitByScope(
+	matches: readonly ScoredMatch[],
+	model: string | null,
+	shareLedger: boolean,
+): ScopedMatches {
+	if (shareLedger || model === null) return { inScope: [...matches], crossModel: [] };
+	const inScope: ScoredMatch[] = [];
+	const crossModel: ScoredMatch[] = [];
+	for (const match of matches) {
+		const owner = match.entry.model;
+		if (owner === null || sameModel(owner, model)) inScope.push(match);
+		else crossModel.push(match);
+	}
+	return { inScope, crossModel };
+}

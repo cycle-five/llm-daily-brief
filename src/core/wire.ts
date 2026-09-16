@@ -13,6 +13,7 @@ export function toWireEntry(row: EntryRow): Entry {
 		display_name: row.display_name,
 		created_at: toIso(row.created_at),
 		hit_count: row.hit_count,
+		model: row.model,
 	};
 }
 

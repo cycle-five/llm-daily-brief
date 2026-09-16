@@ -7,6 +7,8 @@ import {
 	rankMatches,
 	resolveAliases,
 	type ScoredMatch,
+	sameModel,
+	splitByScope,
 	type Thresholds,
 } from "../src/core/match";
 import type { EntryRow } from "../src/core/rows";
@@ -185,5 +187,36 @@ describe("resolveAliases", () => {
 			{ entry: original, kind: "semantic", score: 0.8, confidence: "possible" },
 			{ entry: original, kind: "exact", score: 1, confidence: "repeat", via: alias },
 		]);
+	});
+});
+
+describe("sameModel", () => {
+	it("folds ASCII letters only, matching SQLite NOCASE", () => {
+		expect(sameModel("Claude", "cLAUDE")).toBe(true);
+		expect(sameModel("Grok", "Grok 4")).toBe(false);
+		expect(sameModel("Émile", "émile")).toBe(false);
+	});
+});
+
+describe("splitByScope", () => {
+	const claude = entry({ id: "c", normalized: "stone duality", model: "Claude" });
+	const grok = entry({ id: "g", normalized: "stone duality", model: "Grok" });
+	const legacy = entry({ id: "l", normalized: "stone duality" });
+	const matches: ScoredMatch[] = [claude, grok, legacy].map((row) => ({
+		entry: row,
+		kind: "exact",
+		score: 1,
+		confidence: "repeat",
+	}));
+
+	it("keeps every match in scope while the ledger is shared or no model is declared", () => {
+		expect(splitByScope(matches, "Grok", true)).toEqual({ inScope: matches, crossModel: [] });
+		expect(splitByScope(matches, null, false)).toEqual({ inScope: matches, crossModel: [] });
+	});
+
+	it("keeps the caller's and unattributed topics in scope and sends other models' topics across", () => {
+		const { inScope, crossModel } = splitByScope(matches, "grok", false);
+		expect(inScope.map((match) => match.entry.id)).toEqual(["g", "l"]);
+		expect(crossModel.map((match) => match.entry.id)).toEqual(["c"]);
 	});
 });
