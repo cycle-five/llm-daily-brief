@@ -1,6 +1,7 @@
 import { SELF } from "cloudflare:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it } from "vitest";
+import { CLAIM_FIRST_NOTE } from "../src/api/mcp";
 import {
 	CheckResult,
 	ClaimResult,
@@ -62,6 +63,19 @@ describe("MCP endpoint", () => {
 			"skip_topic",
 			"topic_stats",
 		]);
+	});
+
+	it("tells the read tools not to pre-browse, so a repeat is counted rather than avoided", async () => {
+		const client = await connect(await createTestToken(await seedUser()));
+		const { tools } = await client.listTools();
+		const description = (name: string) =>
+			tools.find((tool) => tool.name === name)?.description ?? "";
+
+		for (const name of ["check_topic", "list_topics"]) {
+			expect(description(name)).toContain(CLAIM_FIRST_NOTE.trim());
+		}
+		// The original wording invited exactly the pre-browsing that zeroes the hit counter.
+		expect(description("list_topics")).not.toContain("avoiding repeats up front");
 	});
 
 	it("claims, repeats, checks, lists and reports stats with typed structured content", async () => {

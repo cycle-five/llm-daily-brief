@@ -13,6 +13,14 @@ import {
 
 export const MCP_SERVER_VERSION = "0.1.0";
 
+/**
+ * Both read tools carry this. A brief that browses before it chooses never repeats and never
+ * records a hit — which looks like success while measuring nothing. See README, "Claim blind".
+ */
+export const CLAIM_FIRST_NOTE =
+	" Do not call this before choosing a topic: choose first and let claim_topic answer, " +
+	"so a repeat is counted instead of quietly avoided.";
+
 export const MCP_TOOL_NAMES = [
 	"claim_topic",
 	"check_topic",
@@ -69,7 +77,10 @@ export function buildMcpServer(api: ApiContext): McpServer {
 		"check_topic",
 		{
 			title: "Check a topic",
-			description: "Report whether a topic would be a repeat, without recording anything.",
+			description:
+				"Report whether a topic would be a repeat, without recording anything, for a topic " +
+				"you are not about to claim." +
+				CLAIM_FIRST_NOTE,
 			inputSchema: CheckInput,
 			annotations: { readOnlyHint: true },
 		},
@@ -85,7 +96,8 @@ export function buildMcpServer(api: ApiContext): McpServer {
 		{
 			title: "List topics",
 			description:
-				"List recently claimed topics, newest first. Useful for avoiding repeats up front.",
+				"List recently claimed topics, newest first, for reviewing what has already been covered." +
+				CLAIM_FIRST_NOTE,
 			inputSchema: ListToolInput,
 			annotations: { readOnlyHint: true },
 		},

@@ -168,15 +168,23 @@ The entry is inserted before any verdict, so a claim nobody answers counts as us
 2. `invalid_input` if the entry is an alias, has `hit_count > 0`, or has aliases of its own.
 3. Load its near misses → `invalid_input` if none is `pending`, or if no `pending` row has
    `matched_entry_id = repeatOf`.
-4. One D1 batch, every statement conditional on that near-miss row still being `pending`
-   (so two concurrent verdicts record at most one hit):
+4. Load the matched entry → `invalid_input` if it is itself an alias. A pending row named an
+   original when it was written, but the matched entry may have been skipped since. Step 5's
+   guard rejects this case too, atomically, so this check exists only for the clearer message.
+5. One D1 batch, every statement conditional on the same SQL guard — not merely on the row
+   still being `pending`. The guard re-checks, inside the batch, every precondition that
+   steps 2-4 tested outside it: the near-miss row is still `pending` and belongs to this user;
+   the claim is still an original, with `hit_count = 0` and no aliases of its own; and the
+   matched entry is still an original. That last clause is what prevents alias chains
+   (X → A → Z); re-checking the rest is what makes two concurrent verdicts record at most one
+   hit. The batch:
    - insert a `hits` row on `repeatOf` (`candidate_text` = the entry's display name,
      `candidate_normalized` = its normalized form, `match_kind`/`score` from the row);
    - increment the original's `hit_count`;
    - set the entry's `alias_of = repeatOf`;
    - set the row's `verdict = 'repeat'`, `note`, `decided_at`.
-5. If the batch changed no near-miss row, a concurrent verdict won → `invalid_input`.
-6. Return `{ skipped: entryId, alias_of: <match on the original with its new hit_count> }`.
+6. If the batch changed no near-miss row, a concurrent verdict won → `invalid_input`.
+7. Return `{ skipped: entryId, alias_of: <match on the original with its new hit_count> }`.
 
 The claim's other pending rows stay `pending`; the dashboard reports them as "not judged —
 claim skipped". The alias keeps its vector.
@@ -218,6 +226,10 @@ Tools: `claim_topic`, `check_topic`, `list_topics`, `skip_topic`, `keep_topic`,
 
 - `claim_topic` description: explains `claimed`, `possible_repeat` (call skip_topic or
   keep_topic) and `repeat`, and that `force` overrides fuzzy (not exact) matches.
+- `check_topic` and `list_topics` descriptions both end with `CLAIM_FIRST_NOTE`, telling the
+  caller to choose a topic before consulting the ledger. A brief that browses first never
+  repeats and never records a hit, so the counter reads zero whether or not the model is
+  repeating itself — the appearance of success, with no measurement behind it.
 - `skip_topic` annotations: `readOnlyHint: false`, `destructiveHint: false`,
   `idempotentHint: false` — it only turns the caller's own new claim into an alias and
   records a hit. Leaving `destructiveHint` off avoids an approval prompt in unattended
@@ -248,12 +260,13 @@ Verdict labels:
 
 `BRIEF_PROMPT_SNIPPET` (Connect page) and the README copy, kept identical:
 
-> Before writing the math section, choose a topic and call claim_topic with category "math"
-> and the topic's common name. If the result is "repeat", choose a different topic and call
-> again, up to 5 times. If the result is "possible_repeat", decide whether your topic is the
-> same as any listed match: if it is, call skip_topic with repeat_of set to that match's
-> entry_id and choose again; if not, call keep_topic. Include a short note with either call.
-> Do the same with category "person" for the historical figure.
+> Before writing the math section, choose a topic on your own, without calling list_topics or
+> check_topic first, then call claim_topic with category "math" and the topic's common name.
+> Claiming blind is what makes the repeat counter meaningful. If the result is "repeat", choose
+> a different topic and call again, up to 5 times. If the result is "possible_repeat", decide
+> whether your topic is the same as any listed match: if it is, call skip_topic with repeat_of
+> set to that match's entry_id and choose again; if not, call keep_topic. Include a short note
+> with either call. Do the same with category "person" for the historical figure.
 
 ## Rollout
 

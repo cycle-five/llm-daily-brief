@@ -214,9 +214,14 @@ describe("Ledger.skip", () => {
 
 		await ledger.skip(userId, { entry_id: claimA.entry.id, repeat_of: z.entry.id });
 
+		// Pin the message, not just the code: skipOpen would also reject this, reporting "was
+		// already decided". Asserting the text proves the app-level matched-entry check fired.
 		await expect(
 			ledger.skip(userId, { entry_id: claimX.entry.id, repeat_of: claimA.entry.id }),
-		).rejects.toMatchObject({ code: "invalid_input" });
+		).rejects.toMatchObject({
+			code: "invalid_input",
+			message: `${claimA.entry.id} is no longer an original; it was itself skipped`,
+		});
 
 		const store = testStore();
 		expect((await store.getEntry(userId, claimX.entry.id))?.alias_of).toBeNull();

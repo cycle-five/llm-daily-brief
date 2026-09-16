@@ -29,7 +29,7 @@ amended by [`docs/superpowers/specs/2026-09-15-near-misses-design.md`](docs/supe
 2. Sign in with GitHub or Google and approve.
 3. Add this to the scheduled task's prompt:
 
-> Before writing the math section, choose a topic and call claim_topic with category "math" and the topic's common name. If the result is "repeat", choose a different topic and call again, up to 5 times. If the result is "possible_repeat", decide whether your topic is the same as any listed match: if it is, call skip_topic with repeat_of set to that match's entry_id and choose again; if not, call keep_topic. Include a short note with either call. Do the same with category "person" for the historical figure.
+> Before writing the math section, choose a topic on your own, without calling list_topics or check_topic first, then call claim_topic with category "math" and the topic's common name. Claiming blind is what makes the repeat counter meaningful. If the result is "repeat", choose a different topic and call again, up to 5 times. If the result is "possible_repeat", decide whether your topic is the same as any listed match: if it is, call skip_topic with repeat_of set to that match's entry_id and choose again; if not, call keep_topic. Include a short note with either call. Do the same with category "person" for the historical figure.
 
 ### Scripts and cron
 
@@ -55,6 +55,46 @@ curl -X POST https://ledger.twkr.io/api/v1/claims \
 Errors are `{error: {code, message}}` with codes `unauthorized` (401),
 `invalid_input` (400), `not_found` (404), `rate_limited` (429),
 `upstream_unavailable` (503).
+
+## How verdicts work
+
+`claim_topic` answers one of three ways:
+
+| Result | Meaning | What the brief does |
+|---|---|---|
+| `claimed` | Nothing like it has been used | Write about it |
+| `repeat` | An exact or spelling-variant match | No entry is created and a hit is counted on the original; pick another topic and claim again |
+| `possible_repeat` | It resembles earlier topics, but meaning-based matches never block on their own (see [`docs/calibration.md`](docs/calibration.md)) | Judge it: `skip_topic` if it is the same topic, `keep_topic` if not |
+
+`skip_topic` records a hit on the original and turns the new claim into an **alias** of it, so
+that phrasing is refused outright next time — the judgement is learned, not asked again.
+`keep_topic` marks the near miss `distinct` and the topic stays claimed. Aliases never carry
+hits of their own and never appear in listings; hits, `repeat_of` and near-miss rows all point
+at the original.
+
+Every surfaced match becomes a row on the dashboard's **Near misses** page:
+
+| Label | Meaning |
+|---|---|
+| Repeat — skipped | Judged the same topic; a hit was recorded on the original |
+| Different — kept | Judged a different topic |
+| No verdict — used | Surfaced, never answered; the topic was used |
+| Not judged — claim skipped | A different match on the same claim was skipped first |
+
+### Claim blind
+
+The brief should choose its topic **before** consulting the ledger, and should not call
+`list_topics` or `check_topic` first. Claiming blind costs nothing — a `repeat` creates no
+entry, so the brief simply picks again — and it is the only way the hit counter measures
+anything. A brief that browses first never repeats and never records a hit: that looks like
+success while telling you nothing about how often the model would have repeated itself.
+
+### Testing by hand
+
+Vectorize takes time to make a new vector queryable. A rephrasing claimed a second after its
+original can match nothing, while the same pair scores 0.90 a couple of minutes later. Seed the
+originals, wait, then claim the rephrasings; `check_topic` is a free readiness gate because it
+records nothing. Real briefs claim days apart, so this affects only hand-testing.
 
 ## Development
 
