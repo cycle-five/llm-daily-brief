@@ -35,6 +35,7 @@ export function Layout(props: { title: string; signedIn?: boolean; children?: Ch
 							<a href="/ledger">Ledger</a>
 							<a href="/repeats">Repeats</a>
 							<a href="/near-misses">Near misses</a>
+							<a href="/overlaps">Overlaps</a>
 							<a href="/global">Global</a>
 							<a href="/access">Access</a>
 							<a href="/connect">Connect</a>
