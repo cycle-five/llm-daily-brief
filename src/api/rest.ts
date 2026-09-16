@@ -29,13 +29,19 @@ export function createRestApp() {
 	app.post("/claims", async (c) => {
 		await enforceRateLimit(c.env.limiter, c.env.userId);
 		const input = parseInput(ClaimInput, await readJson(c.req.raw));
-		return c.json(await c.env.ledger.claim(c.env.userId, input));
+		const client = await c.env.connectionName();
+		// Scripts need not declare a model: the connection's name stands in for it.
+		const model = input.model ?? client;
+		const claim: ClaimInput = model === null ? input : { ...input, model };
+		return c.json(await c.env.ledger.claim(c.env.userId, claim, client));
 	});
 
 	app.post("/checks", async (c) => {
 		await enforceRateLimit(c.env.limiter, c.env.userId);
 		const input = parseInput(CheckInput, await readJson(c.req.raw));
-		return c.json(await c.env.ledger.check(c.env.userId, input));
+		const model = input.model ?? (await c.env.connectionName());
+		const check: CheckInput = model === null ? input : { ...input, model };
+		return c.json(await c.env.ledger.check(c.env.userId, check));
 	});
 
 	app.get("/entries", async (c) => {

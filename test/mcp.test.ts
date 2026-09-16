@@ -1,6 +1,7 @@
 import { SELF } from "cloudflare:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it } from "vitest";
+import { z } from "zod";
 import { CLAIM_FIRST_NOTE } from "../src/api/mcp";
 import {
 	CheckResult,
@@ -8,6 +9,8 @@ import {
 	ErrorBody,
 	KeepResult,
 	ListResult,
+	MODEL_DESCRIPTION,
+	MODEL_VERSION_DESCRIPTION,
 	SkipResult,
 	StatsResult,
 } from "../src/api/schemas";
@@ -51,6 +54,11 @@ async function call(client: Client, name: string, args: Record<string, unknown>)
 	return client.callTool({ name, arguments: args });
 }
 
+const ToolSchema = z.object({
+	properties: z.record(z.string(), z.looseObject({ description: z.string().optional() })),
+	required: z.array(z.string()).default([]),
+});
+
 describe("MCP endpoint", () => {
 	it("lists the six ledger tools", async () => {
 		const client = await connect(await createTestToken(await seedUser()));
@@ -83,17 +91,20 @@ describe("MCP endpoint", () => {
 		const category = uniqueCategory();
 
 		const first = ClaimResult.parse(
-			(await call(client, "claim_topic", { category, name: "Euler's Identity" })).structuredContent,
+			(await call(client, "claim_topic", { category, name: "Euler's Identity", model: "Claude" }))
+				.structuredContent,
 		);
 		expect(first.status).toBe("claimed");
 
 		const second = ClaimResult.parse(
-			(await call(client, "claim_topic", { category, name: "euler identity" })).structuredContent,
+			(await call(client, "claim_topic", { category, name: "euler identity", model: "Claude" }))
+				.structuredContent,
 		);
 		expect(second.status).toBe("repeat");
 
 		const check = CheckResult.parse(
-			(await call(client, "check_topic", { category, name: "EULER IDENTITY" })).structuredContent,
+			(await call(client, "check_topic", { category, name: "EULER IDENTITY", model: "Claude" }))
+				.structuredContent,
 		);
 		expect(check.likely_repeat).toBe(true);
 
@@ -112,7 +123,7 @@ describe("MCP endpoint", () => {
 		const token = await createTestToken(await seedUser());
 		const client = await connect(token);
 		const category = uniqueCategory();
-		await call(client, "claim_topic", { category, name: "Noether" });
+		await call(client, "claim_topic", { category, name: "Noether", model: "Claude" });
 
 		const res = await SELF.fetch(`${ORIGIN}/api/v1/checks`, {
 			method: "POST",
@@ -155,7 +166,11 @@ describe("MCP endpoint", () => {
 		const category = uniqueCategory();
 		const padded = `  ${category.toUpperCase()}  `;
 
-		await call(client, "claim_topic", { category: padded, name: "Fermat's Last Theorem" });
+		await call(client, "claim_topic", {
+			category: padded,
+			name: "Fermat's Last Theorem",
+			model: "Claude",
+		});
 
 		const res = await SELF.fetch(`${ORIGIN}/api/v1/checks`, {
 			method: "POST",
@@ -200,11 +215,63 @@ describe("MCP endpoint", () => {
 		expect(KeepResult.parse(kept.structuredContent)).toEqual({ kept: khayyam.id, distinct: 1 });
 
 		const repeat = ClaimResult.parse(
-			(await call(client, "claim_topic", { category, name: "alhazen" })).structuredContent,
+			(await call(client, "claim_topic", { category, name: "alhazen", model: "Claude" }))
+				.structuredContent,
 		);
 		expect(repeat).toMatchObject({
 			status: "repeat",
 			matches: [{ entry_id: original.id, via_alias: "Alhazen" }],
+		});
+	});
+
+	it("requires a declared model on claim_topic and check_topic, and describes both model fields", async () => {
+		const client = await connect(await createTestToken(await seedUser()));
+		const { tools } = await client.listTools();
+		const schema = (name: string) =>
+			ToolSchema.parse(tools.find((tool) => tool.name === name)?.inputSchema);
+
+		const claim = schema("claim_topic");
+		expect(claim.required).toContain("model");
+		expect(claim.required).not.toContain("model_version");
+		expect(claim.properties.model?.description).toBe(MODEL_DESCRIPTION);
+		expect(claim.properties.model_version?.description).toBe(MODEL_VERSION_DESCRIPTION);
+		const check = schema("check_topic");
+		expect(check.required).toContain("model");
+		expect(check.properties.model?.description).toBe(MODEL_DESCRIPTION);
+		expect(check.properties.model_version).toBeUndefined();
+
+		// The SDK may surface schema violations as a tool error result or as a protocol error.
+		const missing = await call(client, "claim_topic", {
+			category: uniqueCategory(),
+			name: "Hilbert",
+		}).then(
+			(result) => result.isError === true,
+			() => true,
+		);
+		expect(missing).toBe(true);
+	});
+
+	it("records the declared model and version, with the OAuth client's name as the connection", async () => {
+		const userId = await seedUser();
+		const { accessToken } = await issueOAuthTokens(userId);
+		const client = await connect(accessToken);
+
+		const result = ClaimResult.parse(
+			(
+				await call(client, "claim_topic", {
+					category: uniqueCategory(),
+					name: "Hypatia",
+					model: "Claude",
+					model_version: "Opus 5",
+				})
+			).structuredContent,
+		);
+
+		if (result.status !== "claimed") throw new Error("expected claimed");
+		expect(await testStore().getEntry(userId, result.entry.id)).toMatchObject({
+			model: "Claude",
+			model_version: "Opus 5",
+			client: "Test Client",
 		});
 	});
 });

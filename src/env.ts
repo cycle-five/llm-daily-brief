@@ -9,7 +9,7 @@ export interface Env {
 	/** Absent in tests (wrangler.test.jsonc). */
 	VECTORS?: Vectorize;
 	CLAIM_LIMITER: RateLimit;
-	/** Injected by OAuthProvider before the default handler runs. */
+	/** Injected by OAuthProvider before the default and API handlers run. */
 	OAUTH_PROVIDER: OAuthHelpers;
 	PUBLIC_ORIGIN: string;
 	SEMANTIC_REPEAT_THRESHOLD: string;
@@ -23,5 +23,9 @@ export interface Env {
 	COOKIE_SECRET: string;
 }
 
-export const PropsSchema = z.object({ userId: z.string().min(1) });
+export const PropsSchema = z.object({
+	userId: z.string().min(1),
+	/** A personal token's label. OAuth grants carry no client here; see api/connection.ts. */
+	client: z.string().min(1).optional(),
+});
 export type Props = z.infer<typeof PropsSchema>;

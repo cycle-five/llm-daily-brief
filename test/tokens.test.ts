@@ -39,7 +39,7 @@ describe("personal tokens", () => {
 		expect(row.token_hash).toBe(await hashToken(token));
 
 		expect(await resolvePersonalToken(store, "not-a-ledger-token", 2_000)).toBeNull();
-		expect(await resolvePersonalToken(store, token, 2_000)).toEqual({ userId });
+		expect(await resolvePersonalToken(store, token, 2_000)).toEqual({ userId, client: "cron" });
 		expect((await store.listTokens(userId))[0]?.last_used_at).toBe(2_000);
 
 		await resolvePersonalToken(store, token, 2_000 + TOUCH_INTERVAL_MS - 1);

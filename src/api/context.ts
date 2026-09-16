@@ -6,4 +6,6 @@ export interface ApiContext {
 	ledger: Ledger;
 	limiter: RateLimit;
 	globalMinUsers: number;
+	/** The connection's name (see api/connection.ts), resolved on first use. */
+	connectionName: () => Promise<string | null>;
 }
