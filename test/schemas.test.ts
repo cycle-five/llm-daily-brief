@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { CheckInput, ClaimInput, ClaimResult, ListInput, StatsInput } from "../src/api/schemas";
+import {
+	CheckInput,
+	ClaimInput,
+	ClaimResult,
+	KeepInput,
+	ListInput,
+	SkipInput,
+	StatsInput,
+} from "../src/api/schemas";
 
 describe("ClaimInput", () => {
 	it("trims and lowercases the category, trims the name, defaults force to false", () => {
@@ -82,5 +90,21 @@ describe("ClaimResult", () => {
 				semantic: "ok",
 			}).success,
 		).toBe(false);
+	});
+});
+
+describe("verdict inputs", () => {
+	it("trims notes, bounds them to 1-500 characters, and requires repeat_of for skip", () => {
+		expect(KeepInput.parse({ entry_id: "e1", note: "  different people " })).toEqual({
+			entry_id: "e1",
+			note: "different people",
+		});
+		expect(KeepInput.parse({ entry_id: "e1" })).toEqual({ entry_id: "e1" });
+		expect(KeepInput.safeParse({ entry_id: "e1", note: "   " }).success).toBe(false);
+		expect(
+			SkipInput.safeParse({ entry_id: "e1", repeat_of: "e2", note: "x".repeat(501) }).success,
+		).toBe(false);
+		expect(SkipInput.safeParse({ entry_id: "e1" }).success).toBe(false);
+		expect(SkipInput.safeParse({ entry_id: "", repeat_of: "e2" }).success).toBe(false);
 	});
 });

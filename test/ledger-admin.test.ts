@@ -76,6 +76,43 @@ describe("Ledger.forget", () => {
 
 		expect((await ledger.list(userId, { category, limit: 20 })).entries).toEqual([]);
 	});
+
+	it("forgetting an original removes its aliases, their vectors and near misses", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeTestLedger({ semantic });
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const originalId = await claimed(ledger, userId, category, "Ibn al-Haytham");
+		semantic.setSimilarity("Ibn al-Haytham", "Alhazen", 0.9);
+		const flagged = await ledger.claim(userId, { category, name: "Alhazen", force: false });
+		if (flagged.status !== "possible_repeat") throw new Error("expected possible_repeat");
+		await ledger.skip(userId, { entry_id: flagged.entry.id, repeat_of: originalId });
+
+		await ledger.forget(userId, originalId);
+
+		expect(await testStore().getEntry(userId, flagged.entry.id)).toBeNull();
+		expect(semantic.documents.has(flagged.entry.id)).toBe(false);
+		expect(await testStore().listNearMisses(userId, 20)).toEqual([]);
+	});
+
+	it("forgetting an alias keeps the hit it recorded on the original", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeTestLedger({ semantic });
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const originalId = await claimed(ledger, userId, category, "Ibn al-Haytham");
+		semantic.setSimilarity("Ibn al-Haytham", "Alhazen", 0.9);
+		const flagged = await ledger.claim(userId, { category, name: "Alhazen", force: false });
+		if (flagged.status !== "possible_repeat") throw new Error("expected possible_repeat");
+		await ledger.skip(userId, { entry_id: flagged.entry.id, repeat_of: originalId });
+
+		await ledger.forget(userId, flagged.entry.id);
+
+		const stats = await ledger.stats(userId, { scope: "me", category, limit: 20 }, 2);
+		expect(stats.repeats).toMatchObject([{ display_name: "Ibn al-Haytham", hit_count: 1 }]);
+		expect(semantic.documents.has(flagged.entry.id)).toBe(false);
+		expect(await testStore().getEntry(userId, originalId)).not.toBeNull();
+	});
 });
 
 describe("Ledger.stats", () => {

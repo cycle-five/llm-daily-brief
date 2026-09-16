@@ -102,6 +102,27 @@ export type ListResult = z.infer<typeof ListResult>;
 export const ForgetInput = z.object({ entry_id: z.string().min(1) });
 export type ForgetInput = z.infer<typeof ForgetInput>;
 
+const EntryId = z.string().min(1);
+const Note = z.string().trim().min(1).max(500);
+
+export const SkipBody = z.object({ repeat_of: EntryId, note: Note.optional() });
+export type SkipBody = z.infer<typeof SkipBody>;
+
+export const SkipInput = SkipBody.extend({ entry_id: EntryId });
+export type SkipInput = z.infer<typeof SkipInput>;
+
+export const SkipResult = z.object({ skipped: z.string(), alias_of: Match });
+export type SkipResult = z.infer<typeof SkipResult>;
+
+export const KeepBody = z.object({ note: Note.optional() });
+export type KeepBody = z.infer<typeof KeepBody>;
+
+export const KeepInput = KeepBody.extend({ entry_id: EntryId });
+export type KeepInput = z.infer<typeof KeepInput>;
+
+export const KeepResult = z.object({ kept: z.string(), distinct: z.number().int() });
+export type KeepResult = z.infer<typeof KeepResult>;
+
 export const StatsInput = z.object({
 	scope: z.enum(["me", "global"]).default("me"),
 	category: Category.optional(),

@@ -3,9 +3,13 @@ import type {
 	CheckResult,
 	ClaimInput,
 	ClaimResult,
+	KeepInput,
+	KeepResult,
 	ListInput,
 	ListResult,
 	SemanticStatus,
+	SkipInput,
+	SkipResult,
 	StatsInput,
 	StatsResult,
 } from "../api/schemas";
@@ -78,15 +82,90 @@ export class Ledger {
 	}
 
 	async forget(userId: string, entryId: string): Promise<void> {
-		if (!(await this.deps.store.deleteEntry(userId, entryId))) {
+		const { store, semantic } = this.deps;
+		// Aliases cascade with the entry in D1; collect their ids first so their vectors go too.
+		const aliasIds = (await store.listAliases(userId, [entryId])).map((alias) => alias.id);
+		if (!(await store.deleteEntry(userId, entryId))) {
 			throw new LedgerError("not_found", `no entry ${entryId}`);
 		}
 		try {
-			await this.deps.semantic.remove([entryId]);
+			await semantic.remove([entryId, ...aliasIds]);
 		} catch (error) {
 			// Orphaned vectors are harmless: semantic hits are joined against D1.
 			console.warn("vector delete failed", { entryId, error: String(error) });
 		}
+	}
+
+	async skip(userId: string, input: SkipInput): Promise<SkipResult> {
+		const { store, now, newId } = this.deps;
+		const entry = await this.requireEntry(userId, input.entry_id);
+		if (entry.alias_of !== null) {
+			throw new LedgerError("invalid_input", `entry ${entry.id} is already an alias`);
+		}
+		if (entry.hit_count > 0 || (await store.listAliases(userId, [entry.id])).length > 0) {
+			throw new LedgerError("invalid_input", `entry ${entry.id} already has repeat history`);
+		}
+		const pending = (await store.listNearMissesForClaim(userId, entry.id)).filter(
+			(row) => row.verdict === "pending",
+		);
+		if (pending.length === 0) {
+			throw new LedgerError("invalid_input", `entry ${entry.id} has no pending possible matches`);
+		}
+		const row = pending.find((candidate) => candidate.matched_entry_id === input.repeat_of);
+		if (!row) {
+			throw new LedgerError(
+				"invalid_input",
+				`${input.repeat_of} is not a pending possible match of entry ${entry.id}`,
+			);
+		}
+		const decidedAt = now();
+		const applied = await store.skipAsAlias({
+			nearMissId: row.id,
+			claimEntryId: entry.id,
+			hit: {
+				id: newId(),
+				entry_id: row.matched_entry_id,
+				user_id: userId,
+				candidate_text: entry.display_name,
+				candidate_normalized: entry.normalized,
+				match_kind: row.match_kind,
+				score: row.score,
+				created_at: decidedAt,
+			},
+			note: input.note ?? null,
+			decidedAt,
+		});
+		if (!applied) {
+			throw new LedgerError("invalid_input", `entry ${entry.id} was already decided`);
+		}
+		const original = await this.requireEntry(userId, row.matched_entry_id);
+		const via = row.via_entry_id ? await store.getEntry(userId, row.via_entry_id) : null;
+		// Pending near misses only ever come from possible-confidence matches.
+		const match: ScoredMatch = {
+			entry: original,
+			kind: row.match_kind,
+			score: row.score,
+			confidence: "possible",
+		};
+		if (via) match.via = via;
+		return { skipped: entry.id, alias_of: toWireMatch(match) };
+	}
+
+	async keep(userId: string, input: KeepInput): Promise<KeepResult> {
+		const entry = await this.requireEntry(userId, input.entry_id);
+		if (entry.alias_of !== null) {
+			throw new LedgerError("invalid_input", `entry ${entry.id} is already an alias`);
+		}
+		const distinct = await this.deps.store.keepPending(
+			userId,
+			entry.id,
+			input.note ?? null,
+			this.deps.now(),
+		);
+		if (distinct === 0) {
+			throw new LedgerError("invalid_input", `entry ${entry.id} has no pending possible matches`);
+		}
+		return { kept: entry.id, distinct };
 	}
 
 	async stats(userId: string, input: StatsInput, globalMinUsers: number): Promise<StatsResult> {
@@ -312,5 +391,11 @@ export class Ledger {
 			byId.set(row.id, row);
 		}
 		return { matches: classifySemanticHits(hits, byId, this.deps.thresholds), status: "ok" };
+	}
+
+	private async requireEntry(userId: string, entryId: string): Promise<EntryRow> {
+		const entry = await this.deps.store.getEntry(userId, entryId);
+		if (!entry) throw new LedgerError("not_found", `no entry ${entryId}`);
+		return entry;
 	}
 }
