@@ -307,6 +307,51 @@ describe("separate ledgers", () => {
 		expect(again.matches[0]).toMatchObject({ entry_id: haytham.entry.id });
 		expect(await testStore().listOverlaps(userId, 10)).toEqual([]);
 	});
+
+	it("does not record an overlap on an original the caller also reaches through its own alias", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeTestLedger({ semantic });
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const haytham = claimed(await claimAs(ledger, userId, category, "Claude", "Ibn al-Haytham"));
+		semantic.setSimilarity("Ibn al-Haytham", "Alhazen", 0.9);
+		const alhazen = possible(await claimAs(ledger, userId, category, "Grok", "Alhazen"));
+		await ledger.skip(userId, { entry_id: alhazen.entry.id, repeat_of: haytham.entry.id });
+		await testStore().setShareLedger(userId, false);
+		semantic.setSimilarity("Alhazen", "Father of optics", 0.85);
+		semantic.setSimilarity("Ibn al-Haytham", "Father of optics", 0.8);
+
+		const optics = possible(await claimAs(ledger, userId, category, "Grok", "Father of optics"));
+
+		expect(optics.possible_matches).toHaveLength(1);
+		expect(optics.possible_matches[0]).toMatchObject({
+			entry_id: haytham.entry.id,
+			via_alias: "Alhazen",
+		});
+		const nearMisses = await testStore().listNearMissesForClaim(userId, optics.entry.id);
+		expect(nearMisses).toHaveLength(1);
+		expect(nearMisses[0]).toMatchObject({ matched_entry_id: haytham.entry.id });
+		expect(await testStore().listOverlapsForClaim(userId, optics.entry.id)).toEqual([]);
+	});
+
+	it("records overlaps for a forced claim", async () => {
+		const ledger = makeTestLedger();
+		const userId = await separateUser();
+		const category = uniqueCategory();
+		claimed(await claimAs(ledger, userId, category, "Grok", "Srinivasa Ramanujan"));
+		const ramanujam = claimed(
+			await claimAs(ledger, userId, category, "Claude", "Srinivasa Ramanujam"),
+		);
+
+		const forced = claimed(
+			await claimAs(ledger, userId, category, "Grok", "srinivasa ramanujam", { force: true }),
+		);
+
+		expect(forced.forced).toBe(true);
+		expect(await testStore().listOverlapsForClaim(userId, forced.entry.id)).toMatchObject([
+			{ matched_entry_id: ramanujam.entry.id, match_kind: "exact" },
+		]);
+	});
 });
 
 describe("list and stats filters", () => {

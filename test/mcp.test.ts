@@ -10,6 +10,7 @@ import {
 	KeepResult,
 	ListResult,
 	MODEL_DESCRIPTION,
+	MODEL_FILTER_DESCRIPTION,
 	MODEL_VERSION_DESCRIPTION,
 	SkipResult,
 	StatsResult,
@@ -239,6 +240,12 @@ describe("MCP endpoint", () => {
 		expect(check.required).toContain("model");
 		expect(check.properties.model?.description).toBe(MODEL_DESCRIPTION);
 		expect(check.properties.model_version).toBeUndefined();
+		const list = schema("list_topics");
+		expect(list.properties.model?.description).toBe(MODEL_FILTER_DESCRIPTION);
+		expect(list.required).not.toContain("model");
+		const stats = schema("topic_stats");
+		expect(stats.properties.model?.description).toBe(MODEL_FILTER_DESCRIPTION);
+		expect(stats.required).not.toContain("model");
 
 		// The SDK may surface schema violations as a tool error result or as a protocol error.
 		const missing = await call(client, "claim_topic", {

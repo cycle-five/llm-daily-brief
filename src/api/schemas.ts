@@ -19,6 +19,8 @@ export const MODEL_DESCRIPTION =
 	'Your model family name only, such as "Claude", "Grok" or "Gemini" — not a version. It selects the ledger your repeats are checked against, so keep it the same across upgrades.';
 export const MODEL_VERSION_DESCRIPTION =
 	'Optional: your specific model or version, such as "Opus 5". Recorded as a label; it never affects matching.';
+export const MODEL_FILTER_DESCRIPTION =
+	"Optional: only topics claimed by this model family, compared case-insensitively.";
 
 /** A model family or version label: trimmed, 1-64 UTF-8 bytes. */
 export const ModelLabel = z
@@ -121,7 +123,7 @@ export const ListInput = z.object({
 	category: Category.optional(),
 	limit: Limit,
 	since: z.iso.datetime().optional(),
-	model: ModelLabel.optional(),
+	model: ModelLabel.optional().describe(MODEL_FILTER_DESCRIPTION),
 });
 export type ListInput = z.infer<typeof ListInput>;
 
@@ -153,7 +155,7 @@ export const StatsInput = z.object({
 	scope: z.enum(["me", "global"]).default("me"),
 	category: Category.optional(),
 	limit: Limit,
-	model: ModelLabel.optional(),
+	model: ModelLabel.optional().describe(MODEL_FILTER_DESCRIPTION),
 });
 export type StatsInput = z.infer<typeof StatsInput>;
 

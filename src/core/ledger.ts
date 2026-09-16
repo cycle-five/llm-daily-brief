@@ -403,10 +403,13 @@ export class Ledger {
 		const shareLedger = (await store.getUser(userId))?.share_ledger ?? true;
 		// Rank each ledger separately so other models' matches cannot take the caller's slots.
 		const { inScope, crossModel } = splitByScope(resolved, model, shareLedger);
+		// An original reached both cross-model and through the caller's own alias is a near miss, not also an overlap.
+		const inScopeIds = new Set(inScope.map((match) => match.entry.id));
+		const dedupedCrossModel = crossModel.filter((match) => !inScopeIds.has(match.entry.id));
 		return {
 			normalized,
 			matches: rankMatches(inScope),
-			crossModel: rankMatches(crossModel),
+			crossModel: rankMatches(dedupedCrossModel),
 			semantic: semantic.status,
 		};
 	}
