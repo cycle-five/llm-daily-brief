@@ -1,8 +1,8 @@
 # Topic Ledger — Model ledgers and overlaps
 
 - **Date:** 2026-09-16
-- **Status:** Design approved in brainstorming, section by section; awaiting owner review of this
-  document
+- **Status:** Approved by the owner; implemented on `feat/model-ledgers` (v0.2.0). Matching step 3
+  amended during implementation (alias-scope rule).
 - **Branch:** `feat/model-ledgers` (ships in v0.2.0)
 - **Amends:** `docs/superpowers/specs/2026-09-14-topic-ledger-design.md` and
   `docs/superpowers/specs/2026-09-15-near-misses-design.md`; where they disagree, this document
@@ -39,7 +39,8 @@ Galois, Noether, Lovelace), and Grok was asked to rule on topics that were never
    It is stored as an **overlap** with its match kind and score.
 4. The dashboard shows overlaps (exact and spelling matches apart from meaning-only ones, with a
    toggle to combine them), the model behind each topic, a per-model repeat rate, and the switch.
-5. Deploying changes no behaviour. Flipping the switch is the cutover.
+5. Deploying changes no behaviour. (MCP callers must now declare `model`; see Rollout step 6.)
+   Flipping the switch is the cutover.
 
 ## Non-goals
 
@@ -169,8 +170,9 @@ CREATE INDEX overlaps_by_claim ON overlaps (claim_entry_id);
 - `hits.model` and `hits.model_version` name the model that made the attempt. With the switch on,
   that can differ from the model that owns the entry.
 - `overlaps` holds one row per match between a claim and **another model's** entry, written when
-  that claim creates an entry with the switch off. `matched_entry_id` is always an original and
-  `via_entry_id` means what it means on `near_misses`. Each side's model is read from `entries`.
+  that claim creates an entry with the switch off. `matched_entry_id` is an original when the row
+  is written (a later skip can make it an alias) and `via_entry_id` means what it means on
+  `near_misses`. Each side's model is read from `entries`.
 - SQL comments in the migration avoid apostrophes and semicolons, so no statement splitter can
   misparse them.
 
@@ -287,9 +289,10 @@ interface Entry          { id: string; category: string; display_name: string;
 
 ## Dashboard
 
-- **Account (`/account`):** the switch, labelled *Share one ledger across all my models*, with one
-  sentence describing each state. `POST /account/ledger-sharing` through the existing `action`
-  guard. No REST or MCP route can change it.
+- **Account (`/account`):** the switch, labelled *Share one ledger across all my models*, with a
+  sentence describing the current state and a button that switches to the other.
+  `POST /account/ledger-sharing` through the existing `action` guard. No REST or MCP route can
+  change it.
 - **Overlaps (`/overlaps`, new, in the nav between Near misses and Global):**
   - Default view: **Overlaps** (exact and trigram) and, separately, **Similar, unverified**
     (semantic). `?view=combined` shows one list.
@@ -338,7 +341,9 @@ with the owner at the time.
 5. **Apply 0003 to production:** `npx wrangler d1 migrations apply topic-ledger --remote`, then
    compare the same counts against step 3.
 6. **Tag:** `git tag -s v0.2.0 -m "v0.2.0"` and `git push origin v0.2.0`. The Deploy workflow finds
-   0003 already applied and deploys.
+   0003 already applied and deploys. Tag between brief runs: an MCP session that listed tools
+   before the deploy would fail schema validation on `claim_topic` and `check_topic`, because
+   `model` is now required; claude.ai and grok.com list tools again for each new conversation.
 7. **Backfill** the owner's account (`:owner` is its user id). Rows written before step 6 carry no
    model.
    - **Known at spec time (2026-09-16):** everything before Grok's grant (created 1789544973
@@ -348,6 +353,8 @@ with the owner at the time.
      to Grok, and a Grok claim blocked by a Claude topic leaves a hit whose model differs from its
      entry's. So list the unattributed rows created after the grant, grouped into runs by
      timestamp, and have the owner assign each run to a model. The updates then name ids.
+   - Count aliases first (`SELECT COUNT(*) FROM entries WHERE alias_of IS NOT NULL`); with none,
+     the `via` guard changes nothing.
 
    ```sql
    -- Rows after Grok connected, for the owner to assign to runs and models.
@@ -373,7 +380,9 @@ with the owner at the time.
      FROM near_misses n
      JOIN entries c ON c.id = n.claim_entry_id
      JOIN entries m ON m.id = n.matched_entry_id
-     WHERE n.user_id = :owner AND c.model <> m.model COLLATE NOCASE;
+     LEFT JOIN entries v ON v.id = n.via_entry_id
+     WHERE n.user_id = :owner AND c.model <> m.model COLLATE NOCASE
+       AND (v.id IS NULL OR (v.model IS NOT NULL AND v.model <> c.model COLLATE NOCASE));
    ```
 
    Expected with the data as of spec time: 4 entries Grok, the rest Claude, 3 hits Claude, and 5

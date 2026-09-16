@@ -72,7 +72,7 @@ export const OverlapRowSchema = z.object({
 	id: z.string(),
 	user_id: z.string(),
 	claim_entry_id: z.string(),
-	/** Always an original. */
+	/** An original when the overlap was written; a later skip can make it an alias. */
 	matched_entry_id: z.string(),
 	/** The alias whose text actually matched, when the match came through one. */
 	via_entry_id: z.string().nullable(),

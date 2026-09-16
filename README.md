@@ -49,10 +49,11 @@ curl -X POST https://ledger.twkr.io/api/v1/claims \
 | GET | `/api/v1/entries` | `?category=&limit=&since=&model=` | `{entries}` (original topics only; each carries its `model`) |
 | POST | `/api/v1/entries/:id/skip` | `{repeat_of, note?}` | `{skipped, alias_of}`: the entry becomes an alias of `repeat_of` and a hit is recorded |
 | POST | `/api/v1/entries/:id/keep` | `{note?}` | `{kept, distinct}` |
-| DELETE | `/api/v1/entries/:id` | — | 204; erases the topic with its hits, aliases and near misses |
+| DELETE | `/api/v1/entries/:id` | — | 204; erases the topic with its hits, aliases, near misses and overlaps |
 | GET | `/api/v1/stats` | `?scope=me\|global&category=&limit=&model=` | `{scope, repeats}` |
 
-`model` defaults to the token's label. Model filters compare case-insensitively.
+`model` defaults to the connection name: a personal token's label, or an OAuth client's registered
+name. Model filters compare case-insensitively.
 
 Errors are `{error: {code, message}}` with codes `unauthorized` (401),
 `invalid_input` (400), `not_found` (404), `rate_limited` (429),
@@ -103,7 +104,8 @@ records nothing. Real briefs claim days apart, so this affects only hand-testing
 Every claim records the model that made it. Over MCP, `claim_topic` and `check_topic` require
 `model`: the model's family name, such as `Claude`, `Grok` or `Gemini`, never a version, because it
 decides which ledger the claim is checked against. An optional `model_version` ("Opus 5") is kept as
-a label. Over REST, `model` defaults to the token's label. Model names compare case-insensitively.
+a label. Over REST, `model` defaults to the connection name: a personal token's label, or an
+OAuth client's registered name. Model names compare case-insensitively.
 
 **Share one ledger across all my models** is a switch on the dashboard's **Account** page, on by
 default:
