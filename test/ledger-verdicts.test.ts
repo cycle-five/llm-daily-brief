@@ -188,6 +188,52 @@ describe("Ledger.skip", () => {
 		const khayyam = await store.getEntry(f.userId, f.khayyamId);
 		expect((haytham?.hit_count ?? 0) + (khayyam?.hit_count ?? 0)).toBe(1);
 	});
+
+	it("refuses to chain an alias onto an alias, leaving the stale pending row untouched", async () => {
+		// Z <- A (pending), then A <- X (pending), while A is still an original. Skipping A into
+		// an alias of Z must not let X's stale pending row (still naming A) chain onto A.
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeTestLedger({ semantic });
+		const userId = await seedUser();
+		const category = uniqueCategory();
+
+		const z = await ledger.claim(userId, { category, name: "Ibn al-Haytham", force: false });
+		if (z.status !== "claimed") throw new Error("expected claimed");
+
+		semantic.setSimilarity("Ibn al-Haytham", "Alhazen", 0.9);
+		const claimA = await ledger.claim(userId, { category, name: "Alhazen", force: false });
+		if (claimA.status !== "possible_repeat") throw new Error("expected possible_repeat");
+
+		semantic.setSimilarity("Alhazen", "Father of Modern Optics", 0.9);
+		const claimX = await ledger.claim(userId, {
+			category,
+			name: "Father of Modern Optics",
+			force: false,
+		});
+		if (claimX.status !== "possible_repeat") throw new Error("expected possible_repeat");
+
+		await ledger.skip(userId, { entry_id: claimA.entry.id, repeat_of: z.entry.id });
+
+		await expect(
+			ledger.skip(userId, { entry_id: claimX.entry.id, repeat_of: claimA.entry.id }),
+		).rejects.toMatchObject({ code: "invalid_input" });
+
+		const store = testStore();
+		expect((await store.getEntry(userId, claimX.entry.id))?.alias_of).toBeNull();
+		expect((await store.getEntry(userId, claimA.entry.id))?.hit_count).toBe(0);
+		const rows = await store.listNearMissesForClaim(userId, claimX.entry.id);
+		expect(rows.map((row) => row.verdict)).toEqual(["pending"]);
+
+		const again = await ledger.claim(userId, {
+			category,
+			name: "Father of Modern Optics",
+			force: false,
+		});
+		expect(again.status).toBe("repeat");
+		if (again.status === "repeat") {
+			expect(again.matches[0]).toMatchObject({ entry_id: claimX.entry.id, kind: "exact" });
+		}
+	});
 });
 
 describe("Ledger.keep", () => {

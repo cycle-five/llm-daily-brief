@@ -95,10 +95,10 @@ src/
   auth/upstream.ts      GitHub and Google OAuth clients
   auth/handler.ts       /authorize, /login, /callback
   web/                  dashboard pages (.tsx)
+  web/prompt.ts         recommended prompt snippet (BRIEF_PROMPT_SNIPPET)
 migrations/0001_init.sql
 test/
 scripts/calibrate.ts    threshold calibration against real Workers AI
-prompts/daily-brief.md  recommended prompt snippet
 ```
 
 **Typing rule:** every request, response, tool input and tool output is a zod
@@ -423,7 +423,7 @@ Server-rendered Hono JSX; no SPA and no frontend build step.
 | `/repeats` | The user's entries ranked by hits; expand to see each hit's phrasing, kind and score |
 | `/global` | Global leaderboard (topics hit by ≥ `GLOBAL_MIN_USERS` users) |
 | `/access` | Create/revoke personal tokens; list/revoke OAuth grants (`listUserGrants`, `revokeGrant`) |
-| `/connect` | MCP URL, curl example, prompt snippet from `prompts/daily-brief.md` |
+| `/connect` | MCP URL, curl example, prompt snippet from `src/web/prompt.ts` |
 | `/account` | Delete account (confirmation form) |
 
 Account deletion removes the user row (cascading to identities, entries, hits
@@ -530,7 +530,7 @@ one batch, upsert vectors, mark `indexed`. Failures leave rows `pending`.
 
 ## Brief integration
 
-`prompts/daily-brief.md` holds the recommended wording, for example:
+`src/web/prompt.ts` (`BRIEF_PROMPT_SNIPPET`) holds the recommended wording, for example:
 
 > Before writing the math section, choose a topic and call `claim_topic` with
 > category `math` and the topic's common name. If the result is `repeat`, choose

@@ -118,6 +118,16 @@ export class Ledger {
 				`${input.repeat_of} is not a pending possible match of entry ${entry.id}`,
 			);
 		}
+		// A stored near miss named an original when it was written, but a pending row can outlive
+		// that guarantee if the matched entry was since skipped into an alias itself; the SQL guard
+		// (skipOpen) also rejects this, atomically, but checking here gives a clearer error.
+		const original = await this.requireEntry(userId, row.matched_entry_id);
+		if (original.alias_of !== null) {
+			throw new LedgerError(
+				"invalid_input",
+				`${input.repeat_of} is no longer an original; it was itself skipped`,
+			);
+		}
 		const decidedAt = now();
 		const applied = await store.skipAsAlias({
 			nearMissId: row.id,
@@ -138,11 +148,13 @@ export class Ledger {
 		if (!applied) {
 			throw new LedgerError("invalid_input", `entry ${entry.id} was already decided`);
 		}
-		const original = await this.requireEntry(userId, row.matched_entry_id);
+		// Re-read the original: skipAsAlias just incremented its hit_count, and the response's
+		// hit_count must include that hit.
+		const updatedOriginal = await this.requireEntry(userId, row.matched_entry_id);
 		const via = row.via_entry_id ? await store.getEntry(userId, row.via_entry_id) : null;
 		// Pending near misses only ever come from possible-confidence matches.
 		const match: ScoredMatch = {
-			entry: original,
+			entry: updatedOriginal,
 			kind: row.match_kind,
 			score: row.score,
 			confidence: "possible",

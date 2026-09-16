@@ -359,6 +359,42 @@ describe("near misses", () => {
 		expect(rows.map((row) => row.verdict)).toEqual(["repeat", "pending"]);
 	});
 
+	it("skipAsAlias refuses to chain onto a matched entry that is already an alias", async () => {
+		const { store, userId, category, original, other } = await seedClaim();
+		// Alias `other` to `original` first, via a near miss of its own.
+		const otherToOriginal = makeNearMiss(other, original, { score: 0.9, created_at: 5 });
+		await store.insertNearMisses([otherToOriginal]);
+		expect(
+			await store.skipAsAlias({
+				nearMissId: otherToOriginal.id,
+				claimEntryId: other.id,
+				hit: makeHit(original, other.display_name, { match_kind: "semantic", score: 0.9 }),
+				note: null,
+				decidedAt: 5,
+			}),
+		).toBe(true);
+		expect((await store.getEntry(userId, other.id))?.alias_of).toBe(original.id);
+
+		// A pending row that named `other` before it became an alias is now stale.
+		const wedge = makeEntry(userId, category, "Wedge Candidate");
+		await store.insertEntry(wedge);
+		const claimToOther = makeNearMiss(wedge, other, { score: 0.9, created_at: 6 });
+		await store.insertNearMisses([claimToOther]);
+
+		const applied = await store.skipAsAlias({
+			nearMissId: claimToOther.id,
+			claimEntryId: wedge.id,
+			hit: makeHit(other, wedge.display_name, { match_kind: "semantic", score: 0.9 }),
+			note: null,
+			decidedAt: 7,
+		});
+
+		expect(applied).toBe(false);
+		expect((await store.getEntry(userId, wedge.id))?.alias_of).toBeNull();
+		expect((await store.getEntry(userId, other.id))?.hit_count).toBe(0);
+		expect(await store.listNearMissesForClaim(userId, wedge.id)).toEqual([claimToOther]);
+	});
+
 	it("skipAsAlias is a no-op once the claim has been kept", async () => {
 		const { store, userId, category, original, claim, toOriginal } = await seedClaim();
 		expect(await store.keepPending(userId, claim.id, "different people", 10)).toBe(2);

@@ -67,14 +67,20 @@ export interface SkipWrite {
 }
 
 /**
- * True while the near miss (bound as ?1) is pending and its claim is still an original with no
- * repeat history. Every statement of a skip is guarded by it, so a verdict that loses a race on the
- * same claim changes nothing.
+ * True while the near miss (bound at `nearMissIdx`) belongs to the given user (bound at
+ * `userIdx`), is still pending, its match is still an original (so a skip can never chain one
+ * alias onto another), and its claim is still an original with no repeat history. Every
+ * statement of a skip is guarded by it, so a verdict that loses a race on the same claim, or
+ * reaches for another user's row, changes nothing.
  */
-const SKIP_OPEN = `EXISTS (
-	SELECT 1 FROM near_misses n JOIN entries c ON c.id = n.claim_entry_id
-	WHERE n.id = ?1 AND n.verdict = 'pending' AND c.alias_of IS NULL AND c.hit_count = 0
-	  AND NOT EXISTS (SELECT 1 FROM entries a WHERE a.alias_of = c.id))`;
+function skipOpen(nearMissIdx: number, userIdx: number): string {
+	return `EXISTS (
+		SELECT 1 FROM near_misses n JOIN entries c ON c.id = n.claim_entry_id
+		WHERE n.id = ?${nearMissIdx} AND n.user_id = ?${userIdx} AND n.verdict = 'pending'
+		  AND c.alias_of IS NULL AND c.hit_count = 0
+		  AND NOT EXISTS (SELECT 1 FROM entries a WHERE a.alias_of = c.id)
+		  AND EXISTS (SELECT 1 FROM entries o WHERE o.id = n.matched_entry_id AND o.alias_of IS NULL))`;
+}
 
 export const MAX_PHRASINGS = 10;
 export const CANDIDATE_SCAN_LIMIT = 5000;
@@ -424,7 +430,7 @@ export class LedgerStore {
 			this.db
 				.prepare(
 					`INSERT INTO hits (id, entry_id, user_id, candidate_text, candidate_normalized, match_kind, score, created_at)
-					 SELECT ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 WHERE ${SKIP_OPEN}`,
+					 SELECT ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 WHERE ${skipOpen(1, 4)}`,
 				)
 				.bind(
 					write.nearMissId,
@@ -438,19 +444,19 @@ export class LedgerStore {
 					hit.created_at,
 				),
 			this.db
-				.prepare(`UPDATE entries SET hit_count = hit_count + 1 WHERE id = ?2 AND ${SKIP_OPEN}`)
-				.bind(write.nearMissId, hit.entry_id),
+				.prepare(`UPDATE entries SET hit_count = hit_count + 1 WHERE id = ?2 AND ${skipOpen(1, 3)}`)
+				.bind(write.nearMissId, hit.entry_id, hit.user_id),
 			this.db
 				.prepare(
-					`UPDATE near_misses SET verdict = 'repeat', note = ?2, decided_at = ?3 WHERE id = ?1 AND ${SKIP_OPEN}`,
+					`UPDATE near_misses SET verdict = 'repeat', note = ?2, decided_at = ?3 WHERE id = ?1 AND ${skipOpen(1, 4)}`,
 				)
-				.bind(write.nearMissId, write.note, write.decidedAt),
+				.bind(write.nearMissId, write.note, write.decidedAt, hit.user_id),
 			this.db
 				.prepare(
 					`UPDATE entries SET alias_of = ?2 WHERE id = ?3 AND alias_of IS NULL
-					 AND EXISTS (SELECT 1 FROM near_misses WHERE id = ?1 AND claim_entry_id = ?3 AND verdict = 'repeat')`,
+					 AND EXISTS (SELECT 1 FROM near_misses WHERE id = ?1 AND claim_entry_id = ?3 AND verdict = 'repeat' AND user_id = ?4)`,
 				)
-				.bind(write.nearMissId, hit.entry_id, write.claimEntryId),
+				.bind(write.nearMissId, hit.entry_id, write.claimEntryId, hit.user_id),
 		]);
 		return (results[2]?.meta.changes ?? 0) > 0;
 	}

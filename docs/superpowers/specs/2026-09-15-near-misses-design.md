@@ -153,6 +153,10 @@ embed). Then:
 - **Forced:** insert one row per overridden match with `verdict = 'distinct'`,
   `note = 'forced'`, `decided_at = now`; return `claimed` with `forced: true`.
 - **No matches:** return `claimed`, `forced: false`, empty `overridden_matches`.
+- **`force: true` but every match is only `possible`:** `force` overrides repeat-confidence
+  matches only, so with none present nothing is overridden — the claim is not forced. It
+  falls back to the first case: `possible_repeat` with a `pending` row per possible match,
+  `force` otherwise ignored.
 
 The entry is inserted before any verdict, so a claim nobody answers counts as used.
 
