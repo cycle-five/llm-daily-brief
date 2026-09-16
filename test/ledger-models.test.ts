@@ -8,6 +8,7 @@ import { makeEntry, makeTestLedger, seedUser, testStore, uniqueCategory } from "
 
 type Claimed = Extract<ClaimResult, { status: "claimed" }>;
 type Possible = Extract<ClaimResult, { status: "possible_repeat" }>;
+type Repeat = Extract<ClaimResult, { status: "repeat" }>;
 
 function claimed(result: ClaimResult): Claimed {
 	if (result.status !== "claimed") throw new Error(`expected claimed, got ${result.status}`);
@@ -18,6 +19,11 @@ function possible(result: ClaimResult): Possible {
 	if (result.status !== "possible_repeat") {
 		throw new Error(`expected possible_repeat, got ${result.status}`);
 	}
+	return result;
+}
+
+function repeated(result: ClaimResult): Repeat {
+	if (result.status !== "repeat") throw new Error(`expected repeat, got ${result.status}`);
 	return result;
 }
 
@@ -42,6 +48,14 @@ function claimAs(
 
 async function hitModels(entryId: string): Promise<unknown> {
 	return env.DB.prepare("SELECT model, model_version FROM hits WHERE entry_id = ?1")
+		.bind(entryId)
+		.first();
+}
+
+async function latestHitModel(entryId: string): Promise<unknown> {
+	return env.DB.prepare(
+		"SELECT model FROM hits WHERE entry_id = ?1 ORDER BY created_at DESC LIMIT 1",
+	)
 		.bind(entryId)
 		.first();
 }
@@ -253,6 +267,45 @@ describe("separate ledgers", () => {
 		await ledger.skip(userId, { entry_id: alhazen.entry.id, repeat_of: haytham.entry.id });
 
 		expect(await hitModels(haytham.entry.id)).toEqual({ model: "Grok", model_version: "Grok 4" });
+	});
+
+	it("blocks a phrasing the caller skipped onto another model's topic, after sharing is turned off", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeTestLedger({ semantic });
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const haytham = claimed(await claimAs(ledger, userId, category, "Claude", "Ibn al-Haytham"));
+		semantic.setSimilarity("Ibn al-Haytham", "Alhazen", 0.9);
+		const alhazen = possible(await claimAs(ledger, userId, category, "Grok", "Alhazen"));
+		await ledger.skip(userId, { entry_id: alhazen.entry.id, repeat_of: haytham.entry.id });
+		await testStore().setShareLedger(userId, false);
+
+		const again = repeated(await claimAs(ledger, userId, category, "Grok", "alhazen"));
+
+		expect(again.matches[0]).toMatchObject({
+			entry_id: haytham.entry.id,
+			kind: "exact",
+			via_alias: "Alhazen",
+		});
+		expect(await latestHitModel(haytham.entry.id)).toEqual({ model: "Grok" });
+		expect(await testStore().listOverlaps(userId, 10)).toEqual([]);
+	});
+
+	it("blocks the original's owner when another model's alias of its topic matches", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ledger = makeTestLedger({ semantic });
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const haytham = claimed(await claimAs(ledger, userId, category, "Claude", "Ibn al-Haytham"));
+		semantic.setSimilarity("Ibn al-Haytham", "Alhazen", 0.9);
+		const alhazen = possible(await claimAs(ledger, userId, category, "Grok", "Alhazen"));
+		await ledger.skip(userId, { entry_id: alhazen.entry.id, repeat_of: haytham.entry.id });
+		await testStore().setShareLedger(userId, false);
+
+		const again = repeated(await claimAs(ledger, userId, category, "Claude", "alhazen"));
+
+		expect(again.matches[0]).toMatchObject({ entry_id: haytham.entry.id });
+		expect(await testStore().listOverlaps(userId, 10)).toEqual([]);
 	});
 });
 

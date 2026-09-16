@@ -206,8 +206,10 @@ by running v0.1.0's own test suite with this migration added.
 2. **Resolve aliases** as today.
 3. **Split by scope.** With the switch on, every match is *in scope*. With it off, a match is in
    scope when its original's model is `NULL` or equals the caller's model case-insensitively;
-   otherwise it is *cross-model*. An alias match takes its original's model, because the topic
-   belongs to the original's ledger.
+   otherwise it is *cross-model*. A match through an alias is in scope when either the alias or its
+   original belongs to the caller's model or is unattributed: the alias records the caller's own
+   earlier judgment, and without this rule the claim would collide with the caller's own alias row
+   in the per-model unique index. It is cross-model only when neither belongs to the caller.
 4. **Rank each group separately** with `rankMatches` (dedupe by entry, order by `KIND_RANK` then
    score, cap at `MAX_MATCHES`). Separate ranking stops other models' matches from pushing the
    caller's own out of the five slots, and `KIND_RANK` puts exact and trigram ahead of semantic,

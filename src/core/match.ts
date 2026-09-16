@@ -123,8 +123,10 @@ export interface ScopedMatches {
 
 /**
  * Splits resolved matches by ledger. With a shared ledger, or when the caller declared no model,
- * every match is in scope. Otherwise a match is in scope when its entry (an original, after alias
- * resolution) is unattributed or belongs to the caller's model.
+ * every match is in scope. Otherwise a match is in scope when its original, or the alias it came
+ * through, is unattributed or belongs to the caller's model: an alias records the caller's own
+ * earlier judgment, and without this the claim would collide with the caller's own alias row in
+ * the per-model unique index. It is cross-model only when neither belongs to the caller.
  */
 export function splitByScope(
 	matches: readonly ScoredMatch[],
@@ -132,11 +134,13 @@ export function splitByScope(
 	shareLedger: boolean,
 ): ScopedMatches {
 	if (shareLedger || model === null) return { inScope: [...matches], crossModel: [] };
+	const belongsToCaller = (owner: string | null): boolean =>
+		owner === null || sameModel(owner, model);
 	const inScope: ScoredMatch[] = [];
 	const crossModel: ScoredMatch[] = [];
 	for (const match of matches) {
-		const owner = match.entry.model;
-		if (owner === null || sameModel(owner, model)) inScope.push(match);
+		const viaBelongs = match.via !== undefined && belongsToCaller(match.via.model);
+		if (belongsToCaller(match.entry.model) || viaBelongs) inScope.push(match);
 		else crossModel.push(match);
 	}
 	return { inScope, crossModel };

@@ -219,4 +219,35 @@ describe("splitByScope", () => {
 		expect(inScope.map((match) => match.entry.id)).toEqual(["g", "l"]);
 		expect(crossModel.map((match) => match.entry.id)).toEqual(["c"]);
 	});
+
+	it("keeps a match in scope when either the original or the alias it came through belongs to the caller", () => {
+		const claudeOriginal = entry({ id: "o1", normalized: "x", model: "Claude" });
+		const grokAlias = entry({ id: "a1", normalized: "x alias", model: "Grok", alias_of: "o1" });
+		const grokOriginal = entry({ id: "o2", normalized: "y", model: "Grok" });
+		const claudeAlias = entry({ id: "a2", normalized: "y alias", model: "Claude", alias_of: "o2" });
+		const claudeOriginal2 = entry({ id: "o3", normalized: "z", model: "Claude" });
+		const claudeAlias2 = entry({
+			id: "a3",
+			normalized: "z alias",
+			model: "Claude",
+			alias_of: "o3",
+		});
+		const claudeOriginal3 = entry({ id: "o4", normalized: "w", model: "Claude" });
+		const legacyAlias = entry({ id: "a4", normalized: "w alias", alias_of: "o4" });
+		const viaMatches: ScoredMatch[] = [
+			// original Claude, via Grok alias: in scope (the caller's own alias).
+			{ entry: claudeOriginal, via: grokAlias, kind: "exact", score: 1, confidence: "repeat" },
+			// original Grok, via Claude alias: in scope (the caller's own alias).
+			{ entry: grokOriginal, via: claudeAlias, kind: "exact", score: 1, confidence: "repeat" },
+			// original Claude, via Claude alias: cross-model for a Grok caller.
+			{ entry: claudeOriginal2, via: claudeAlias2, kind: "exact", score: 1, confidence: "repeat" },
+			// original Claude, via an unattributed alias: in scope.
+			{ entry: claudeOriginal3, via: legacyAlias, kind: "exact", score: 1, confidence: "repeat" },
+		];
+
+		const { inScope, crossModel } = splitByScope(viaMatches, "grok", false);
+
+		expect(inScope.map((match) => match.entry.id)).toEqual(["o1", "o2", "o4"]);
+		expect(crossModel.map((match) => match.entry.id)).toEqual(["o3"]);
+	});
 });
