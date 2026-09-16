@@ -1,5 +1,14 @@
+import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { makeEntry, makeHit, makeNearMiss, seedUser, testStore, uniqueCategory } from "./helpers";
+import {
+	makeEntry,
+	makeHit,
+	makeNearMiss,
+	makeOverlap,
+	seedUser,
+	testStore,
+	uniqueCategory,
+} from "./helpers";
 
 describe("users and identities", () => {
 	it("returns the same user for the same identity and a new user for another", async () => {
@@ -25,6 +34,7 @@ describe("users and identities", () => {
 			display_name: "A",
 			email: "a@example.com",
 			created_at: 1,
+			share_ledger: true,
 		});
 	});
 
@@ -68,7 +78,7 @@ describe("entries", () => {
 		]);
 	});
 
-	it("findExact returns the matching row for the owner and null for another user or category", async () => {
+	it("findExact returns every matching row for the owner, and none for another user or category", async () => {
 		const store = testStore();
 		const alice = await seedUser("alice");
 		const bob = await seedUser("bob");
@@ -76,9 +86,9 @@ describe("entries", () => {
 		const entry = makeEntry(alice, category, "Euler's Identity");
 		await store.insertEntry(entry);
 
-		expect(await store.findExact(alice, category, entry.normalized)).toEqual(entry);
-		expect(await store.findExact(bob, category, entry.normalized)).toBeNull();
-		expect(await store.findExact(alice, uniqueCategory(), entry.normalized)).toBeNull();
+		expect(await store.findExact(alice, category, entry.normalized)).toEqual([entry]);
+		expect(await store.findExact(bob, category, entry.normalized)).toEqual([]);
+		expect(await store.findExact(alice, uniqueCategory(), entry.normalized)).toEqual([]);
 	});
 
 	it("getEntriesByIds ignores other users' and other categories' ids", async () => {
@@ -326,7 +336,7 @@ describe("near misses", () => {
 		expect(repeat?.entry.id).toBe(original.id);
 		expect(repeat?.entry.hit_count).toBe(1);
 		expect(repeat?.hits).toEqual([
-			{ candidate_text: "Alhazen", match_kind: "semantic", score: 0.9 },
+			{ candidate_text: "Alhazen", match_kind: "semantic", score: 0.9, model: null },
 		]);
 		expect(await store.listNearMissesForClaim(userId, claim.id)).toEqual([
 			{ ...toOriginal, verdict: "repeat", note: "same person", decided_at: 10 },
@@ -448,11 +458,233 @@ describe("near misses", () => {
 		expect(rows[0]).toMatchObject({
 			category,
 			claim_alias_of: null,
+			claim_model: null,
+			matched_model: null,
 			match_kind: "semantic",
 			score: 0.81,
 			verdict: "pending",
 			note: null,
 		});
 		expect(await store.listNearMisses(await seedUser("other"), 20)).toEqual([]);
+	});
+});
+
+describe("model attribution", () => {
+	it("stores model, version and client, and allows a topic once per model", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const claude = makeEntry(userId, category, "Stone duality", {
+			model: "Claude",
+			model_version: "Opus 5",
+			client: "Claude",
+		});
+		const grok = makeEntry(userId, category, "Stone duality", {
+			model: "Grok",
+			client: "openclaw",
+		});
+
+		expect(await store.insertEntry(claude)).toBe("inserted");
+		expect(await store.insertEntry(grok)).toBe("inserted");
+		expect(
+			await store.insertEntry(makeEntry(userId, category, "Stone duality", { model: "CLAUDE" })),
+		).toBe("duplicate");
+
+		expect(await store.getEntry(userId, claude.id)).toEqual(claude);
+		const exact = await store.findExact(userId, category, claude.normalized);
+		expect(exact).toHaveLength(2);
+		expect(exact).toEqual(expect.arrayContaining([claude, grok]));
+	});
+
+	it("records the attempting model on hits from recordHit and skipAsAlias, and filters repeats by model", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const euler = makeEntry(userId, category, "Euler", { model: "Claude" });
+		const gauss = makeEntry(userId, category, "Gauss", { model: "Grok" });
+		const claim = makeEntry(userId, category, "Carl Gauss", { model: "Grok" });
+		for (const entry of [euler, gauss, claim]) await store.insertEntry(entry);
+		const eulerHit = makeHit(euler, "euler", {
+			model: "Grok",
+			model_version: "Grok 4",
+			created_at: 1,
+		});
+		await store.recordHit(eulerHit);
+		const toGauss = makeNearMiss(claim, gauss);
+		await store.insertNearMisses([toGauss]);
+		expect(
+			await store.skipAsAlias({
+				nearMissId: toGauss.id,
+				claimEntryId: claim.id,
+				hit: makeHit(gauss, "Carl Gauss", {
+					match_kind: "semantic",
+					score: 0.8,
+					model: "Grok",
+					model_version: "Grok 4",
+					created_at: 2,
+				}),
+				note: null,
+				decidedAt: 2,
+			}),
+		).toBe(true);
+
+		expect(
+			await env.DB.prepare("SELECT model, model_version FROM hits WHERE entry_id = ?1")
+				.bind(gauss.id)
+				.first(),
+		).toEqual({ model: "Grok", model_version: "Grok 4" });
+		expect(
+			await env.DB.prepare("SELECT model, model_version FROM hits WHERE id = ?1")
+				.bind(eulerHit.id)
+				.first(),
+		).toEqual({ model: "Grok", model_version: "Grok 4" });
+		const [eulerRepeat] = await store.topRepeatsForUser(userId, category, 10, "claude");
+		expect(eulerRepeat?.entry.id).toBe(euler.id);
+		expect(eulerRepeat?.hits).toEqual([
+			{ candidate_text: "euler", match_kind: "exact", score: 1, model: "Grok" },
+		]);
+		expect(
+			(await store.topRepeatsForUser(userId, category, 10, "GROK")).map((row) => row.entry.id),
+		).toEqual([gauss.id]);
+		expect(await store.topRepeatsForUser(userId, category, 10)).toHaveLength(2);
+	});
+
+	it("flips the share switch, which starts on", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		expect((await store.getUser(userId))?.share_ledger).toBe(true);
+		await store.setShareLedger(userId, false);
+		expect((await store.getUser(userId))?.share_ledger).toBe(false);
+		await store.setShareLedger(userId, true);
+		expect((await store.getUser(userId))?.share_ledger).toBe(true);
+	});
+
+	it("filters listEntries by model case-insensitively, leaving unattributed rows to the unfiltered list", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const claude = makeEntry(userId, category, "Hilbert", { model: "Claude", created_at: 1 });
+		const grok = makeEntry(userId, category, "Cantor", { model: "Grok", created_at: 2 });
+		const legacy = makeEntry(userId, category, "Riemann", { created_at: 3 });
+		for (const entry of [claude, grok, legacy]) await store.insertEntry(entry);
+
+		expect(
+			(await store.listEntries(userId, { category, limit: 10, model: "grok" })).map((e) => e.id),
+		).toEqual([grok.id]);
+		expect((await store.listEntries(userId, { category, limit: 10 })).map((e) => e.id)).toEqual([
+			legacy.id,
+			grok.id,
+			claude.id,
+		]);
+	});
+});
+
+describe("overlaps and per-model summaries", () => {
+	it("round-trips overlaps for a claim and lists them newest first, with both models and the via alias", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const haytham = makeEntry(userId, category, "Ibn al-Haytham", {
+			model: "Claude",
+			created_at: 1,
+		});
+		const alias = makeEntry(userId, category, "Alhazen", {
+			model: "Claude",
+			alias_of: haytham.id,
+			created_at: 2,
+		});
+		const grokAlhazen = makeEntry(userId, category, "alhazen", { model: "Grok", created_at: 3 });
+		const stone = makeEntry(userId, category, "Stone duality", { model: "Claude", created_at: 4 });
+		const grokStone = makeEntry(userId, category, "Stone duality", {
+			model: "Grok",
+			created_at: 5,
+		});
+		for (const entry of [haytham, alias, grokAlhazen, stone, grokStone]) {
+			await store.insertEntry(entry);
+		}
+		const viaAlias = makeOverlap(grokAlhazen, haytham, {
+			via_entry_id: alias.id,
+			match_kind: "exact",
+			score: 1,
+			created_at: 3,
+		});
+		const exact = makeOverlap(grokStone, stone, { match_kind: "exact", score: 1, created_at: 5 });
+		await store.insertOverlaps([viaAlias, exact]);
+		await store.insertOverlaps([]);
+
+		expect(await store.listOverlapsForClaim(userId, grokAlhazen.id)).toEqual([viaAlias]);
+		expect(await store.listOverlapsForClaim(await seedUser("other"), grokAlhazen.id)).toEqual([]);
+		expect(await store.listOverlaps(userId, 10)).toEqual([
+			{
+				id: exact.id,
+				created_at: 5,
+				category,
+				claim_name: "Stone duality",
+				claim_model: "Grok",
+				matched_name: "Stone duality",
+				matched_model: "Claude",
+				via_name: null,
+				match_kind: "exact",
+				score: 1,
+			},
+			{
+				id: viaAlias.id,
+				created_at: 3,
+				category,
+				claim_name: "alhazen",
+				claim_model: "Grok",
+				matched_name: "Ibn al-Haytham",
+				matched_model: "Claude",
+				via_name: "Alhazen",
+				match_kind: "exact",
+				score: 1,
+			},
+		]);
+		expect(await store.listOverlaps(await seedUser("other"), 10)).toEqual([]);
+	});
+
+	it("names each side's model on near misses", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const claude = makeEntry(userId, category, "Ibn al-Haytham", { model: "Claude" });
+		const grok = makeEntry(userId, category, "Alhazen", { model: "Grok" });
+		await store.insertEntry(claude);
+		await store.insertEntry(grok);
+		await store.insertNearMisses([makeNearMiss(grok, claude)]);
+
+		expect(await store.listNearMisses(userId, 10)).toMatchObject([
+			{
+				claim_name: "Alhazen",
+				claim_model: "Grok",
+				matched_name: "Ibn al-Haytham",
+				matched_model: "Claude",
+			},
+		]);
+	});
+
+	it("summarises originals and hits per model, case-insensitively, labelled by the newest spelling", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const euler = makeEntry(userId, category, "Euler", { model: "Claude", created_at: 1 });
+		const alias = makeEntry(userId, category, "Leonhard Euler", {
+			model: "Claude",
+			alias_of: euler.id,
+			created_at: 2,
+		});
+		const gauss = makeEntry(userId, category, "Gauss", { model: "claude", created_at: 3 });
+		const legacy = makeEntry(userId, category, "Noether", { created_at: 4 });
+		for (const entry of [euler, alias, gauss, legacy]) await store.insertEntry(entry);
+		await store.recordHit(makeHit(euler, "euler", { model: "CLAUDE" }));
+		await store.recordHit(makeHit(euler, "leonhard euler", { model: "Claude" }));
+		await store.recordHit(makeHit(gauss, "gauss", { model: "Grok" }));
+
+		expect(await store.modelSummary(userId)).toEqual([
+			{ label: "claude", originals: 2, hits: 2 },
+			{ label: "Grok", originals: 0, hits: 1 },
+			{ label: null, originals: 1, hits: 0 },
+		]);
+		expect(await store.modelSummary(await seedUser("empty"))).toEqual([]);
 	});
 });

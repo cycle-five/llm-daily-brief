@@ -20,15 +20,15 @@ import {
 	classifySemanticHits,
 	findLexicalMatches,
 	isLikelyRepeat,
-	MAX_MATCHES,
 	rankMatches,
 	resolveAliases,
 	type ScoredMatch,
 	type SemanticHit,
+	splitByScope,
 	type Thresholds,
 } from "./match";
 import { normalize } from "./normalize";
-import type { EntryRow, NearMissRow } from "./rows";
+import type { EntryRow, NearMissRow, OverlapRow } from "./rows";
 import { toWireEntry, toWireMatch } from "./wire";
 
 export interface LedgerDeps {
@@ -41,14 +41,21 @@ export interface LedgerDeps {
 
 interface Evaluation {
 	normalized: string;
+	/** Matches in the caller's ledger: they can block or ask for a verdict. */
 	matches: ScoredMatch[];
+	/** Matches on other models' topics while ledgers are separate: recorded as overlaps. */
+	crossModel: ScoredMatch[];
 	semantic: SemanticStatus;
 }
 
 export const BACKFILL_BATCH = 100;
 
-/** One topic's aliases can fill the semantic results; over-fetch before resolving and ranking. */
-export const SEMANTIC_TOP_K = MAX_MATCHES * 2;
+/**
+ * Aliases of one topic, and other models' topics, can fill the semantic results, so over-fetch
+ * before resolving, splitting and ranking. Twenty is within Vectorize's topK limit in every
+ * return mode; confirm the limit before raising it.
+ */
+export const SEMANTIC_TOP_K = 20;
 
 /** Sent with every possible_repeat so an LLM caller knows a verdict is expected. */
 export const NEXT_STEP =
@@ -60,7 +67,7 @@ export class Ledger {
 	constructor(private readonly deps: LedgerDeps) {}
 
 	async check(userId: string, input: CheckInput): Promise<CheckResult> {
-		const evaluation = await this.evaluate(userId, input.category, input.name);
+		const evaluation = await this.evaluate(userId, input.category, input.name, input.model ?? null);
 		return {
 			likely_repeat: isLikelyRepeat(evaluation.matches),
 			matches: evaluation.matches.map((match) => toWireMatch(match)),
@@ -68,8 +75,9 @@ export class Ledger {
 		};
 	}
 
-	claim(userId: string, input: ClaimInput): Promise<ClaimResult> {
-		return this.claimOnce(userId, input, false);
+	/** `client` is the connection's name, stored for audit; it never affects matching. */
+	claim(userId: string, input: ClaimInput, client: string | null = null): Promise<ClaimResult> {
+		return this.claimOnce(userId, input, client, false);
 	}
 
 	async list(userId: string, input: ListInput): Promise<ListResult> {
@@ -77,6 +85,7 @@ export class Ledger {
 			category: input.category,
 			limit: input.limit,
 			sinceMs: input.since === undefined ? undefined : Date.parse(input.since),
+			model: input.model,
 		});
 		return { entries: rows.map(toWireEntry) };
 	}
@@ -140,6 +149,8 @@ export class Ledger {
 				candidate_normalized: entry.normalized,
 				match_kind: row.match_kind,
 				score: row.score,
+				model: entry.model,
+				model_version: entry.model_version,
 				created_at: decidedAt,
 			},
 			note: input.note ?? null,
@@ -194,7 +205,7 @@ export class Ledger {
 				})),
 			};
 		}
-		const rows = await store.topRepeatsForUser(userId, input.category, input.limit);
+		const rows = await store.topRepeatsForUser(userId, input.category, input.limit, input.model);
 		return {
 			scope: "me",
 			repeats: rows.map((row) => ({
@@ -242,10 +253,13 @@ export class Ledger {
 	private async claimOnce(
 		userId: string,
 		input: ClaimInput,
+		client: string | null,
 		isRetry: boolean,
 	): Promise<ClaimResult> {
 		const { store, semantic, now, newId } = this.deps;
-		const evaluation = await this.evaluate(userId, input.category, input.name);
+		const model = input.model ?? null;
+		const modelVersion = input.model_version ?? null;
+		const evaluation = await this.evaluate(userId, input.category, input.name, model);
 		const best = evaluation.matches.find((match) => match.confidence === "repeat");
 
 		if (best && (!input.force || best.kind === "exact")) {
@@ -257,6 +271,8 @@ export class Ledger {
 				candidate_normalized: evaluation.normalized,
 				match_kind: best.kind,
 				score: best.score,
+				model,
+				model_version: modelVersion,
 				created_at: now(),
 			});
 			return {
@@ -276,13 +292,17 @@ export class Ledger {
 			hit_count: 0,
 			alias_of: null,
 			created_at: now(),
+			model,
+			model_version: modelVersion,
+			client,
 		};
 		if ((await store.insertEntry(entry)) === "duplicate") {
-			// A concurrent claim inserted the same normalized name; re-evaluating yields an exact repeat.
+			// A concurrent claim by the same model inserted the same normalized name; re-evaluating
+			// yields an exact repeat.
 			if (isRetry) {
 				throw new LedgerError("upstream_unavailable", "topic claim conflicted twice; retry");
 			}
-			return this.claimOnce(userId, input, true);
+			return this.claimOnce(userId, input, client, true);
 		}
 
 		const forced = best !== undefined;
@@ -303,6 +323,20 @@ export class Ledger {
 					note: forced ? FORCED_NOTE : null,
 					created_at: entry.created_at,
 					decided_at: forced ? entry.created_at : null,
+				}),
+			),
+		);
+		await store.insertOverlaps(
+			evaluation.crossModel.map(
+				(match): OverlapRow => ({
+					id: newId(),
+					user_id: userId,
+					claim_entry_id: entry.id,
+					matched_entry_id: match.entry.id,
+					via_entry_id: match.via?.id ?? null,
+					match_kind: match.kind,
+					score: match.score,
+					created_at: entry.created_at,
 				}),
 			),
 		);
@@ -340,17 +374,23 @@ export class Ledger {
 		};
 	}
 
-	private async evaluate(userId: string, category: string, name: string): Promise<Evaluation> {
+	private async evaluate(
+		userId: string,
+		category: string,
+		name: string,
+		model: string | null,
+	): Promise<Evaluation> {
+		const { store, thresholds } = this.deps;
 		const normalized = normalize(name);
 		if (normalized.length === 0) {
 			throw new LedgerError("invalid_input", "name must contain at least one letter or digit");
 		}
-		const candidates = await this.deps.store.listCandidates(userId, category);
-		const lexical = findLexicalMatches(normalized, candidates, this.deps.thresholds);
-		if (!lexical.some((match) => match.kind === "exact")) {
-			// listCandidates is windowed (CANDIDATE_SCAN_LIMIT); an exact match can lie outside it.
-			const exact = await this.deps.store.findExact(userId, category, normalized);
-			if (exact) lexical.push({ entry: exact, kind: "exact", score: 1, confidence: "repeat" });
+		const candidates = await store.listCandidates(userId, category);
+		const lexical = findLexicalMatches(normalized, candidates, thresholds);
+		// listCandidates is windowed (CANDIDATE_SCAN_LIMIT), so an exact match can lie outside it, and
+		// each model can hold its own copy. Ranking deduplicates an entry found both ways.
+		for (const exact of await store.findExact(userId, category, normalized)) {
+			lexical.push({ entry: exact, kind: "exact", score: 1, confidence: "repeat" });
 		}
 		const semantic = await this.semanticMatches(userId, category, name, candidates);
 		const resolved = await this.withOriginals(
@@ -359,9 +399,17 @@ export class Ledger {
 			[...lexical, ...semantic.matches],
 			candidates,
 		);
+		// The API refuses callers whose user row is gone; default to sharing, the conservative choice.
+		const shareLedger = (await store.getUser(userId))?.share_ledger ?? true;
+		// Rank each ledger separately so other models' matches cannot take the caller's slots.
+		const { inScope, crossModel } = splitByScope(resolved, model, shareLedger);
+		// An original reached both cross-model and through the caller's own alias is a near miss, not also an overlap.
+		const inScopeIds = new Set(inScope.map((match) => match.entry.id));
+		const dedupedCrossModel = crossModel.filter((match) => !inScopeIds.has(match.entry.id));
 		return {
 			normalized,
-			matches: rankMatches(resolved),
+			matches: rankMatches(inScope),
+			crossModel: rankMatches(dedupedCrossModel),
 			semantic: semantic.status,
 		};
 	}

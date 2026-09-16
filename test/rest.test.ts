@@ -12,7 +12,7 @@ import {
 	StatsResult,
 } from "../src/api/schemas";
 import { FakeSemanticIndex } from "./fakes/semantic";
-import { makeTestLedger, seedUser, uniqueCategory } from "./helpers";
+import { makeTestLedger, seedUser, testStore, uniqueCategory } from "./helpers";
 
 async function context(overrides: Partial<ApiContext> = {}): Promise<ApiContext> {
 	return {
@@ -20,6 +20,7 @@ async function context(overrides: Partial<ApiContext> = {}): Promise<ApiContext>
 		ledger: makeTestLedger(),
 		limiter: env.CLAIM_LIMITER,
 		globalMinUsers: 2,
+		connectionName: async () => "cron",
 		...overrides,
 	};
 }
@@ -222,5 +223,68 @@ describe("verdicts", () => {
 		const nothingPending = await post(`/api/v1/entries/${plain.entry.id}/keep`, {}, ctx);
 		expect(nothingPending.status).toBe(400);
 		expect(ErrorBody.parse(await nothingPending.json()).error.code).toBe("invalid_input");
+	});
+});
+
+describe("models over REST", () => {
+	it("defaults the model to the connection name, and an explicit model wins", async () => {
+		const ctx = await context();
+		const category = uniqueCategory();
+
+		const defaulted = ClaimResult.parse(
+			await (await post("/api/v1/claims", { category, name: "Hilbert" }, ctx)).json(),
+		);
+		const declared = ClaimResult.parse(
+			await (
+				await post("/api/v1/claims", { category, name: "Cantor", model: "Claude" }, ctx)
+			).json(),
+		);
+
+		if (defaulted.status !== "claimed" || declared.status !== "claimed") {
+			throw new Error("expected claimed");
+		}
+		expect(defaulted.entry.model).toBe("cron");
+		expect(declared.entry.model).toBe("Claude");
+		expect(await testStore().getEntry(ctx.userId, declared.entry.id)).toMatchObject({
+			client: "cron",
+		});
+	});
+
+	it("checks against the connection's ledger when no model is given", async () => {
+		const ctx = await context();
+		await testStore().setShareLedger(ctx.userId, false);
+		const category = uniqueCategory();
+		await post("/api/v1/claims", { category, name: "Gauss", model: "Claude" }, ctx);
+
+		const check = async (body: Record<string, unknown>) =>
+			CheckResult.parse(await (await post("/api/v1/checks", { category, ...body }, ctx)).json());
+
+		expect((await check({ name: "gauss" })).likely_repeat).toBe(false);
+		expect((await check({ name: "gauss", model: "claude" })).likely_repeat).toBe(true);
+	});
+
+	it("filters entries and stats by model", async () => {
+		const ctx = await context();
+		const category = uniqueCategory();
+		await post("/api/v1/claims", { category, name: "Hilbert", model: "Claude" }, ctx);
+		await post("/api/v1/claims", { category, name: "Cantor", model: "Grok" }, ctx);
+		await post("/api/v1/claims", { category, name: "hilbert", model: "Claude" }, ctx);
+
+		const listed = ListResult.parse(
+			await (
+				await createRestApp().request(`/api/v1/entries?category=${category}&model=grok`, {}, ctx)
+			).json(),
+		);
+		expect(listed.entries.map((entry) => entry.display_name)).toEqual(["Cantor"]);
+		const stats = StatsResult.parse(
+			await (
+				await createRestApp().request(
+					`/api/v1/stats?scope=me&category=${category}&model=GROK`,
+					{},
+					ctx,
+				)
+			).json(),
+		);
+		expect(stats.repeats).toEqual([]);
 	});
 });

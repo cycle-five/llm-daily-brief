@@ -7,7 +7,7 @@ import { DEFAULT_THRESHOLDS } from "../src/config";
 import { Ledger } from "../src/core/ledger";
 import type { Thresholds } from "../src/core/match";
 import { normalize } from "../src/core/normalize";
-import type { EntryRow, HitRow, NearMissRow } from "../src/core/rows";
+import type { EntryRow, HitRow, NearMissRow, OverlapRow } from "../src/core/rows";
 import { providerOptions } from "../src/index";
 import type { SemanticIndex } from "../src/semantic/index";
 import { LedgerStore } from "../src/store/d1";
@@ -49,6 +49,9 @@ export function makeEntry(
 		vector_status: "pending",
 		hit_count: 0,
 		alias_of: null,
+		model: null,
+		model_version: null,
+		client: null,
 		created_at: Date.now(),
 		...overrides,
 	};
@@ -67,6 +70,8 @@ export function makeHit(
 		candidate_normalized: normalize(candidate),
 		match_kind: "exact",
 		score: 1,
+		model: null,
+		model_version: null,
 		created_at: Date.now(),
 		...overrides,
 	};
@@ -89,6 +94,24 @@ export function makeNearMiss(
 		note: null,
 		created_at: Date.now(),
 		decided_at: null,
+		...overrides,
+	};
+}
+
+export function makeOverlap(
+	claim: EntryRow,
+	matched: EntryRow,
+	overrides: Partial<OverlapRow> = {},
+): OverlapRow {
+	return {
+		id: crypto.randomUUID(),
+		user_id: claim.user_id,
+		claim_entry_id: claim.id,
+		matched_entry_id: matched.id,
+		via_entry_id: null,
+		match_kind: "semantic",
+		score: 0.8,
+		created_at: Date.now(),
 		...overrides,
 	};
 }

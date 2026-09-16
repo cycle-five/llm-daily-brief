@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	CheckInput,
+	CheckToolInput,
 	ClaimInput,
 	ClaimResult,
+	ClaimToolInput,
 	KeepInput,
 	ListInput,
 	SkipInput,
@@ -59,6 +61,7 @@ describe("ClaimResult", () => {
 			display_name: "Euler",
 			created_at: "2026-09-14T00:00:00.000Z",
 			hit_count: 0,
+			model: null,
 		};
 		expect(
 			ClaimResult.parse({
@@ -106,5 +109,30 @@ describe("verdict inputs", () => {
 		).toBe(false);
 		expect(SkipInput.safeParse({ entry_id: "e1" }).success).toBe(false);
 		expect(SkipInput.safeParse({ entry_id: "", repeat_of: "e2" }).success).toBe(false);
+	});
+});
+
+describe("model fields", () => {
+	it("trim model and model_version, bound them to 1-64 bytes, and require model only on tool inputs", () => {
+		expect(
+			ClaimInput.parse({
+				category: "math",
+				name: "x",
+				model: " Claude ",
+				model_version: " Opus 5 ",
+			}),
+		).toMatchObject({ model: "Claude", model_version: "Opus 5" });
+		expect(ClaimInput.safeParse({ category: "math", name: "x", model: "   " }).success).toBe(false);
+		expect(
+			ClaimInput.safeParse({ category: "math", name: "x", model: "é".repeat(33) }).success,
+		).toBe(false);
+		expect(ClaimInput.parse({ category: "math", name: "x" })).not.toHaveProperty("model");
+		expect(ClaimToolInput.safeParse({ category: "math", name: "x" }).success).toBe(false);
+		expect(CheckToolInput.safeParse({ category: "math", name: "x" }).success).toBe(false);
+		expect(CheckToolInput.safeParse({ category: "math", name: "x", model: "Grok" }).success).toBe(
+			true,
+		);
+		expect(ListInput.parse({ model: " grok " })).toMatchObject({ model: "grok" });
+		expect(StatsInput.parse({ model: "Claude" })).toMatchObject({ model: "Claude" });
 	});
 });

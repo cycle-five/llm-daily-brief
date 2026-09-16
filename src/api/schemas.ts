@@ -15,6 +15,22 @@ export type Category = z.infer<typeof Category>;
 export const TopicName = z.string().trim().min(1).max(200);
 export type TopicName = z.infer<typeof TopicName>;
 
+export const MODEL_DESCRIPTION =
+	'Your model family name only, such as "Claude", "Grok" or "Gemini" — not a version. It selects the ledger your repeats are checked against, so keep it the same across upgrades.';
+export const MODEL_VERSION_DESCRIPTION =
+	'Optional: your specific model or version, such as "Opus 5". Recorded as a label; it never affects matching.';
+export const MODEL_FILTER_DESCRIPTION =
+	"Optional: only topics claimed by this model family, compared case-insensitively.";
+
+/** A model family or version label: trimmed, 1-64 UTF-8 bytes. */
+export const ModelLabel = z
+	.string()
+	.trim()
+	.refine((value) => {
+		const bytes = utf8Length(value);
+		return bytes >= 1 && bytes <= 64;
+	}, "must be 1-64 UTF-8 bytes after trimming");
+
 const Limit = z.coerce.number().int().min(1).max(100).default(20);
 
 export const MatchKind = z.enum(["exact", "trigram", "semantic"]);
@@ -45,6 +61,7 @@ export const Entry = z.object({
 	display_name: z.string(),
 	created_at: z.string(),
 	hit_count: z.number().int(),
+	model: z.string().nullable(),
 });
 export type Entry = z.infer<typeof Entry>;
 
@@ -52,8 +69,14 @@ export const ClaimInput = z.object({
 	category: Category,
 	name: TopicName,
 	force: z.boolean().default(false),
+	model: ModelLabel.optional().describe(MODEL_DESCRIPTION),
+	model_version: ModelLabel.optional().describe(MODEL_VERSION_DESCRIPTION),
 });
 export type ClaimInput = z.infer<typeof ClaimInput>;
+
+/** MCP callers must declare their model; REST falls back to the connection name. */
+export const ClaimToolInput = ClaimInput.extend({ model: ModelLabel.describe(MODEL_DESCRIPTION) });
+export type ClaimToolInput = z.infer<typeof ClaimToolInput>;
 
 export const ClaimResult = z.discriminatedUnion("status", [
 	z.object({
@@ -79,8 +102,15 @@ export const ClaimResult = z.discriminatedUnion("status", [
 ]);
 export type ClaimResult = z.infer<typeof ClaimResult>;
 
-export const CheckInput = z.object({ category: Category, name: TopicName });
+export const CheckInput = z.object({
+	category: Category,
+	name: TopicName,
+	model: ModelLabel.optional().describe(MODEL_DESCRIPTION),
+});
 export type CheckInput = z.infer<typeof CheckInput>;
+
+export const CheckToolInput = CheckInput.extend({ model: ModelLabel.describe(MODEL_DESCRIPTION) });
+export type CheckToolInput = z.infer<typeof CheckToolInput>;
 
 export const CheckResult = z.object({
 	likely_repeat: z.boolean(),
@@ -93,6 +123,7 @@ export const ListInput = z.object({
 	category: Category.optional(),
 	limit: Limit,
 	since: z.iso.datetime().optional(),
+	model: ModelLabel.optional().describe(MODEL_FILTER_DESCRIPTION),
 });
 export type ListInput = z.infer<typeof ListInput>;
 
@@ -124,6 +155,7 @@ export const StatsInput = z.object({
 	scope: z.enum(["me", "global"]).default("me"),
 	category: Category.optional(),
 	limit: Limit,
+	model: ModelLabel.optional().describe(MODEL_FILTER_DESCRIPTION),
 });
 export type StatsInput = z.infer<typeof StatsInput>;
 

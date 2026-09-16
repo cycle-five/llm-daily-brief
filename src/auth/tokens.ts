@@ -42,12 +42,12 @@ export async function resolvePersonalToken(
 	store: LedgerStore,
 	token: string,
 	now: number,
-): Promise<{ userId: string } | null> {
+): Promise<{ userId: string; client: string } | null> {
 	if (!token.startsWith(TOKEN_PREFIX)) return null;
 	const row = await store.findActiveTokenByHash(await hashToken(token));
 	if (!row) return null;
 	if (row.last_used_at === null || now - row.last_used_at >= TOUCH_INTERVAL_MS) {
 		await store.touchToken(row.id, now);
 	}
-	return { userId: row.user_id };
+	return { userId: row.user_id, client: row.label };
 }

@@ -2,21 +2,30 @@ import type { GrantSummary } from "@cloudflare/workers-oauth-provider";
 import type { Context, Hono } from "hono";
 import { deleteCookie } from "hono/cookie";
 import { z } from "zod";
-import type { Entry, RepeatStat } from "../api/schemas";
+import { ModelLabel, type RepeatStat } from "../api/schemas";
 import { SESSION_COOKIE } from "../auth/session";
 import { createPersonalToken } from "../auth/tokens";
 import { globalMinUsersFromEnv } from "../config";
 import { LedgerError } from "../core/errors";
+import { sameModel } from "../core/match";
 import type { EntryRow, TokenRow } from "../core/rows";
 import { toIso } from "../core/wire";
 import { ledgerFromEnv } from "../services";
-import { LedgerStore, type NearMissView, type UserRepeatRow } from "../store/d1";
+import {
+	LedgerStore,
+	type ModelSummaryRow,
+	type NearMissView,
+	type OverlapView,
+	type UserRepeatRow,
+} from "../store/d1";
 import { currentUserId, isSameOrigin, type WebDeps, type WebEnv } from "./guards";
 import { ErrorPage, Layout, render } from "./layout";
 import { BRIEF_PROMPT_SNIPPET } from "./prompt";
 
 const TokenForm = z.object({ label: z.string().trim().min(1).max(64) });
 const DeleteForm = z.object({ confirm: z.literal("delete") });
+const ShareForm = z.object({ share: z.enum(["on", "off"]) });
+const ViewQuery = z.enum(["split", "combined"]).catch("split");
 const GrantMetadata = z.object({ clientName: z.string() });
 /**
  * `Handler`'s `Context<WebEnv>` carries no route-literal type, so `c.req.param` falls back to
@@ -42,10 +51,37 @@ function LandingPage() {
 	);
 }
 
-function LedgerPage(props: { entries: Entry[]; aliases: ReadonlyMap<string, string[]> }) {
+function modelLabel(model: string, version: string | null): string {
+	return version === null ? model : `${model} (${version})`;
+}
+
+/** True when both names are present and name different models. */
+function differentModels(a: string | null, b: string | null): boolean {
+	return a !== null && b !== null && !sameModel(a, b);
+}
+
+/**
+ * Hits over attempts. Every attempt ends as a kept original, a blocked hit, or a skip (an alias,
+ * which is no longer an original, plus a hit), so originals plus hits counts attempts.
+ */
+export function formatRepeatRate(originals: number, hits: number): string {
+	const attempts = originals + hits;
+	return attempts === 0 ? "—" : `${Math.round((hits / attempts) * 100)}%`;
+}
+
+function LedgerPage(props: {
+	entries: EntryRow[];
+	aliases: ReadonlyMap<string, string[]>;
+	model: string | undefined;
+}) {
 	return (
 		<Layout title="Ledger" signedIn>
 			<h1>Ledger</h1>
+			{props.model === undefined ? null : (
+				<p>
+					{`Showing topics from ${props.model}.`} <a href="/ledger">Show all</a>
+				</p>
+			)}
 			{props.entries.length === 0 ? (
 				<p>
 					No topics yet. Connect your brief on the <a href="/connect">Connect</a> page.
@@ -56,6 +92,7 @@ function LedgerPage(props: { entries: Entry[]; aliases: ReadonlyMap<string, stri
 						<tr>
 							<th>Topic</th>
 							<th>Category</th>
+							<th>Model</th>
 							<th>Claimed</th>
 							<th>Repeats</th>
 							<th />
@@ -64,6 +101,9 @@ function LedgerPage(props: { entries: Entry[]; aliases: ReadonlyMap<string, stri
 					<tbody>
 						{props.entries.map((entry) => {
 							const aliases = props.aliases.get(entry.id) ?? [];
+							const showClient =
+								entry.client !== null &&
+								(entry.model === null || !sameModel(entry.client, entry.model));
 							return (
 								<tr>
 									<td>
@@ -76,7 +116,22 @@ function LedgerPage(props: { entries: Entry[]; aliases: ReadonlyMap<string, stri
 										) : null}
 									</td>
 									<td>{entry.category}</td>
-									<td>{entry.created_at.slice(0, 10)}</td>
+									<td>
+										{entry.model === null ? (
+											"—"
+										) : (
+											<a href={`/ledger?model=${encodeURIComponent(entry.model)}`}>
+												{modelLabel(entry.model, entry.model_version)}
+											</a>
+										)}
+										{showClient ? (
+											<>
+												<br />
+												<small>{`connection: ${entry.client}`}</small>
+											</>
+										) : null}
+									</td>
+									<td>{toIso(entry.created_at).slice(0, 10)}</td>
 									<td>{entry.hit_count}</td>
 									<td>
 										<form class="inline" method="post" action={`/entries/${entry.id}/forget`}>
@@ -142,6 +197,12 @@ function NearMissesPage(props: { rows: NearMissView[] }) {
 											<small>{`via ${row.via_name}`}</small>
 										</>
 									)}
+									{differentModels(row.claim_model, row.matched_model) ? (
+										<>
+											<br />
+											<small>{`from ${row.matched_model}`}</small>
+										</>
+									) : null}
 								</td>
 								<td>{row.match_kind}</td>
 								<td>{row.score.toFixed(2)}</td>
@@ -157,10 +218,126 @@ function NearMissesPage(props: { rows: NearMissView[] }) {
 	);
 }
 
-function MyRepeatsPage(props: { rows: UserRepeatRow[] }) {
+function OverlapTable(props: { rows: OverlapView[] }) {
+	return (
+		<table>
+			<thead>
+				<tr>
+					<th>Date</th>
+					<th>Topic</th>
+					<th>Model</th>
+					<th>Matched topic</th>
+					<th>Model</th>
+					<th>Match</th>
+					<th>Score</th>
+				</tr>
+			</thead>
+			<tbody>
+				{props.rows.map((row) => (
+					<tr>
+						<td>{toIso(row.created_at).slice(0, 10)}</td>
+						<td>{row.claim_name}</td>
+						<td>{row.claim_model ?? "—"}</td>
+						<td>
+							{row.matched_name}
+							{row.via_name === null ? null : (
+								<>
+									<br />
+									<small>{`via ${row.via_name}`}</small>
+								</>
+							)}
+						</td>
+						<td>{row.matched_model ?? "—"}</td>
+						<td>{row.match_kind}</td>
+						<td>{row.score.toFixed(2)}</td>
+					</tr>
+				))}
+			</tbody>
+		</table>
+	);
+}
+
+function OverlapsPage(props: {
+	rows: OverlapView[];
+	view: "split" | "combined";
+	shareLedger: boolean;
+}) {
+	const lexical = props.rows.filter((row) => row.match_kind !== "semantic");
+	const similar = props.rows.filter((row) => row.match_kind === "semantic");
+	return (
+		<Layout title="Overlaps" signedIn>
+			<h1>Overlaps between models</h1>
+			<p>Topics one model claimed that another model had already covered.</p>
+			{props.shareLedger ? (
+				<p>
+					Your models share one ledger, so a match between models blocks the claim instead of
+					recording an overlap. Those appear on <a href="/repeats">Repeats</a>. Change this on the{" "}
+					<a href="/account">Account</a> page.
+				</p>
+			) : null}
+			{props.rows.length === 0 ? (
+				<p>No overlaps yet.</p>
+			) : props.view === "combined" ? (
+				<>
+					<p>
+						<a href="/overlaps">Split by match type</a>
+					</p>
+					<OverlapTable rows={props.rows} />
+				</>
+			) : (
+				<>
+					<p>
+						<a href="/overlaps?view=combined">Combine into one list</a>
+					</p>
+					<h2>Overlaps</h2>
+					{lexical.length === 0 ? <p>None.</p> : <OverlapTable rows={lexical} />}
+					<h2>Similar, unverified</h2>
+					<p>Matched by meaning only, so these may be different topics.</p>
+					{similar.length === 0 ? <p>None.</p> : <OverlapTable rows={similar} />}
+				</>
+			)}
+			<p>Showing the newest {PAGE_LIMIT} overlaps.</p>
+		</Layout>
+	);
+}
+
+function ModelSummaryTable(props: { rows: ModelSummaryRow[] }) {
+	return (
+		<table>
+			<thead>
+				<tr>
+					<th>Model</th>
+					<th>Topics</th>
+					<th>Repeats</th>
+					<th>Repeat rate</th>
+				</tr>
+			</thead>
+			<tbody>
+				{props.rows.map((row) => (
+					<tr>
+						<td>{row.label ?? "Unattributed"}</td>
+						<td>{row.originals}</td>
+						<td>{row.hits}</td>
+						<td>{formatRepeatRate(row.originals, row.hits)}</td>
+					</tr>
+				))}
+			</tbody>
+		</table>
+	);
+}
+
+function MyRepeatsPage(props: { rows: UserRepeatRow[]; summary: ModelSummaryRow[] }) {
 	return (
 		<Layout title="Your repeats" signedIn>
 			<h1>Your repeats</h1>
+			{props.summary.length === 0 ? null : (
+				<>
+					<h2>By model</h2>
+					<p>The repeat rate is repeats over attempts: every claim the model made, kept or not.</p>
+					<ModelSummaryTable rows={props.summary} />
+					<h2>Topics</h2>
+				</>
+			)}
 			{props.rows.length === 0 ? (
 				<p>No repeats yet.</p>
 			) : (
@@ -193,7 +370,15 @@ function MyRepeatsPage(props: { rows: UserRepeatRow[] }) {
 											<tbody>
 												{row.hits.map((hit) => (
 													<tr>
-														<td>{hit.candidate_text}</td>
+														<td>
+															{hit.candidate_text}
+															{differentModels(hit.model, row.entry.model) ? (
+																<>
+																	{" "}
+																	<small>{`by ${hit.model}`}</small>
+																</>
+															) : null}
+														</td>
 														<td>{hit.match_kind}</td>
 														<td>{hit.score.toFixed(2)}</td>
 													</tr>
@@ -314,7 +499,7 @@ function ConnectPage(props: { origin: string }) {
 		`curl -X POST ${props.origin}/api/v1/claims`,
 		'  -H "Authorization: Bearer ldg_YOUR_TOKEN"',
 		'  -H "content-type: application/json"',
-		`  -d '{"category":"math","name":"Euler identity"}'`,
+		`  -d '{"category":"math","name":"Euler identity","model":"cron"}'`,
 	].join(" \\\n");
 	return (
 		<Layout title="Connect" signedIn>
@@ -327,16 +512,30 @@ function ConnectPage(props: { origin: string }) {
 				Create a token on the <a href="/access">Access</a> page, then:
 			</p>
 			<pre>{curl}</pre>
+			<p>
+				<code>model</code> is optional over REST and defaults to the token's label.
+			</p>
 			<h2>Prompt for your brief</h2>
 			<pre>{BRIEF_PROMPT_SNIPPET}</pre>
 		</Layout>
 	);
 }
 
-function AccountPage() {
+function AccountPage(props: { shareLedger: boolean }) {
 	return (
 		<Layout title="Account" signedIn>
-			<h1>Delete account</h1>
+			<h1>Account</h1>
+			<h2>Share one ledger across all my models</h2>
+			<p>
+				{props.shareLedger
+					? "On: a topic any of your models has claimed is a repeat for all of them."
+					: "Off: each model is blocked only by its own topics, and matches between models are recorded as overlaps."}
+			</p>
+			<form method="post" action="/account/ledger-sharing">
+				<input type="hidden" name="share" value={props.shareLedger ? "off" : "on"} />
+				<button type="submit">{props.shareLedger ? "Turn sharing off" : "Turn sharing on"}</button>
+			</form>
+			<h2>Delete account</h2>
 			<p>This permanently deletes your topics, repeat history, tokens and connected clients.</p>
 			<form method="post" action="/account/delete">
 				<label>
@@ -383,12 +582,18 @@ export function registerDashboardRoutes(app: Hono<WebEnv>, deps: WebDeps): void 
 	app.get(
 		"/ledger",
 		page(async (c, userId) => {
-			const { entries } = await ledgerFromEnv(c.env).list(userId, { limit: PAGE_LIMIT });
-			const aliases = await new LedgerStore(c.env.DB).listAliases(
+			const filter = ModelLabel.safeParse(c.req.query("model"));
+			const model = filter.success ? filter.data : undefined;
+			const store = new LedgerStore(c.env.DB);
+			const entries = await store.listEntries(userId, { limit: PAGE_LIMIT, model });
+			const aliases = await store.listAliases(
 				userId,
 				entries.map((entry) => entry.id),
 			);
-			return render(c, <LedgerPage entries={entries} aliases={aliasNamesByOriginal(aliases)} />);
+			return render(
+				c,
+				<LedgerPage entries={entries} aliases={aliasNamesByOriginal(aliases)} model={model} />,
+			);
 		}),
 	);
 
@@ -407,8 +612,10 @@ export function registerDashboardRoutes(app: Hono<WebEnv>, deps: WebDeps): void 
 	app.get(
 		"/repeats",
 		page(async (c, userId) => {
-			const rows = await new LedgerStore(c.env.DB).topRepeatsForUser(userId, undefined, PAGE_LIMIT);
-			return render(c, <MyRepeatsPage rows={rows} />);
+			const store = new LedgerStore(c.env.DB);
+			const rows = await store.topRepeatsForUser(userId, undefined, PAGE_LIMIT);
+			const summary = await store.modelSummary(userId);
+			return render(c, <MyRepeatsPage rows={rows} summary={summary} />);
 		}),
 	);
 
@@ -417,6 +624,23 @@ export function registerDashboardRoutes(app: Hono<WebEnv>, deps: WebDeps): void 
 		page(async (c, userId) => {
 			const rows = await new LedgerStore(c.env.DB).listNearMisses(userId, PAGE_LIMIT);
 			return render(c, <NearMissesPage rows={rows} />);
+		}),
+	);
+
+	app.get(
+		"/overlaps",
+		page(async (c, userId) => {
+			const store = new LedgerStore(c.env.DB);
+			const rows = await store.listOverlaps(userId, PAGE_LIMIT);
+			const user = await store.getUser(userId);
+			return render(
+				c,
+				<OverlapsPage
+					rows={rows}
+					view={ViewQuery.parse(c.req.query("view"))}
+					shareLedger={user?.share_ledger ?? true}
+				/>,
+			);
 		}),
 	);
 
@@ -489,7 +713,22 @@ export function registerDashboardRoutes(app: Hono<WebEnv>, deps: WebDeps): void 
 
 	app.get(
 		"/account",
-		page(async (c) => render(c, <AccountPage />)),
+		page(async (c, userId) => {
+			const user = await new LedgerStore(c.env.DB).getUser(userId);
+			return render(c, <AccountPage shareLedger={user?.share_ledger ?? true} />);
+		}),
+	);
+
+	app.post(
+		"/account/ledger-sharing",
+		action(async (c, userId) => {
+			const form = ShareForm.safeParse(await c.req.parseBody());
+			if (!form.success) {
+				return render(c, <ErrorPage title="Not changed" message="Choose on or off." />, 400);
+			}
+			await new LedgerStore(c.env.DB).setShareLedger(userId, form.data.share === "on");
+			return c.redirect("/account");
+		}),
 	);
 
 	app.post(

@@ -4,6 +4,7 @@ import { LedgerError } from "../core/errors";
 import { type Env, PropsSchema } from "../env";
 import { ledgerFromEnv } from "../services";
 import { LedgerStore } from "../store/d1";
+import { connectionName, once } from "./connection";
 import type { ApiContext } from "./context";
 import { errorResponse } from "./errors";
 import { buildMcpServer } from "./mcp";
@@ -28,6 +29,7 @@ export const apiHandler = {
 			ledger: ledgerFromEnv(env),
 			limiter: env.CLAIM_LIMITER,
 			globalMinUsers: globalMinUsersFromEnv(env),
+			connectionName: once(() => connectionName(env, request, props.data.client)),
 		};
 		if (new URL(request.url).pathname === "/mcp") {
 			const mcp = createMcpHandler(() => buildMcpServer(api), {

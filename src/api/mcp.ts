@@ -3,15 +3,15 @@ import type { ApiContext } from "./context";
 import { toErrorBody } from "./errors";
 import { enforceRateLimit } from "./ratelimit";
 import {
-	CheckInput,
-	ClaimInput,
+	CheckToolInput,
+	ClaimToolInput,
 	KeepInput,
 	ListToolInput,
 	SkipInput,
 	StatsToolInput,
 } from "./schemas";
 
-export const MCP_SERVER_VERSION = "0.1.0";
+export const MCP_SERVER_VERSION = "0.2.0";
 
 /**
  * Both read tools carry this. A brief that browses before it chooses never repeats and never
@@ -63,13 +63,13 @@ export function buildMcpServer(api: ApiContext): McpServer {
 				'Returns status "claimed", "possible_repeat" or "repeat". On "repeat", pick a different topic and call again. ' +
 				'On "possible_repeat" the topic is recorded but resembles earlier topics: follow next_step and call ' +
 				"skip_topic (same topic) or keep_topic (different topic). force=true overrides fuzzy (not exact) matches.",
-			inputSchema: ClaimInput,
+			inputSchema: ClaimToolInput,
 			annotations: { readOnlyHint: false, idempotentHint: false },
 		},
 		async (args) =>
 			run(async () => {
 				await enforceRateLimit(api.limiter, api.userId);
-				return api.ledger.claim(api.userId, args);
+				return api.ledger.claim(api.userId, args, await api.connectionName());
 			}),
 	);
 
@@ -81,7 +81,7 @@ export function buildMcpServer(api: ApiContext): McpServer {
 				"Report whether a topic would be a repeat, without recording anything, for a topic " +
 				"you are not about to claim." +
 				CLAIM_FIRST_NOTE,
-			inputSchema: CheckInput,
+			inputSchema: CheckToolInput,
 			annotations: { readOnlyHint: true },
 		},
 		async (args) =>
