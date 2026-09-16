@@ -1,0 +1,14 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
+	"files": {
+		"includes": ["src/**", "test/**", "scripts/**", "*.json", "*.jsonc", "vitest.config.ts"]
+	},
+	"formatter": { "indentStyle": "tab", "lineWidth": 100 },
+	"javascript": { "formatter": { "quoteStyle": "double" } },
+	"linter": {
+		"rules": {
+			"recommended": true,
+			"suspicious": { "noExplicitAny": "error" }
+		}
+	}
+}

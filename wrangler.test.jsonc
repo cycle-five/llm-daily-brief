@@ -1,0 +1,26 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "topic-ledger-test",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-09-01",
+	"compatibility_flags": ["nodejs_compat"],
+	"vars": {
+		"PUBLIC_ORIGIN": "https://ledger.test",
+		"SEMANTIC_REPEAT_THRESHOLD": "1",
+		"SEMANTIC_POSSIBLE_THRESHOLD": "0.78",
+		"TRIGRAM_REPEAT_THRESHOLD": "0.6",
+		"GLOBAL_MIN_USERS": "2"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "topic-ledger",
+			"database_id": "00000000-0000-0000-0000-000000000000",
+			"migrations_dir": "migrations"
+		}
+	],
+	"kv_namespaces": [{ "binding": "OAUTH_KV", "id": "test-oauth-kv" }],
+	"ratelimits": [
+		{ "name": "CLAIM_LIMITER", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } }
+	]
+}
