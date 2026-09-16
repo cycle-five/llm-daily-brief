@@ -67,6 +67,21 @@ export const NearMissRowSchema = z.object({
 });
 export type NearMissRow = z.infer<typeof NearMissRowSchema>;
 
+/** A match between a claim and another model's topic, recorded instead of blocking. */
+export const OverlapRowSchema = z.object({
+	id: z.string(),
+	user_id: z.string(),
+	claim_entry_id: z.string(),
+	/** Always an original. */
+	matched_entry_id: z.string(),
+	/** The alias whose text actually matched, when the match came through one. */
+	via_entry_id: z.string().nullable(),
+	match_kind: MatchKind,
+	score: z.number(),
+	created_at: z.number(),
+});
+export type OverlapRow = z.infer<typeof OverlapRowSchema>;
+
 export const TokenRowSchema = z.object({
 	id: z.string(),
 	user_id: z.string(),

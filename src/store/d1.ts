@@ -7,6 +7,8 @@ import {
 	type HitRow,
 	type NearMissRow,
 	NearMissRowSchema,
+	type OverlapRow,
+	OverlapRowSchema,
 	type TokenRow,
 	TokenRowSchema,
 	type UserRow,
@@ -49,7 +51,9 @@ const NearMissViewSchema = z.object({
 	created_at: z.number(),
 	claim_name: z.string(),
 	claim_alias_of: z.string().nullable(),
+	claim_model: z.string().nullable(),
 	matched_name: z.string(),
+	matched_model: z.string().nullable(),
 	category: z.string(),
 	via_name: z.string().nullable(),
 	match_kind: MatchKind,
@@ -58,6 +62,30 @@ const NearMissViewSchema = z.object({
 	note: z.string().nullable(),
 });
 export type NearMissView = z.infer<typeof NearMissViewSchema>;
+
+const OverlapViewSchema = z.object({
+	id: z.string(),
+	created_at: z.number(),
+	category: z.string(),
+	claim_name: z.string(),
+	claim_model: z.string().nullable(),
+	matched_name: z.string(),
+	matched_model: z.string().nullable(),
+	via_name: z.string().nullable(),
+	match_kind: MatchKind,
+	score: z.number(),
+});
+export type OverlapView = z.infer<typeof OverlapViewSchema>;
+
+const ModelSummaryRowSchema = z.object({
+	/** The model's newest spelling; null for unattributed rows. */
+	label: z.string().nullable(),
+	/** Entries that are not aliases. */
+	originals: z.number().int(),
+	/** Hits whose attempting model is this model. */
+	hits: z.number().int(),
+});
+export type ModelSummaryRow = z.infer<typeof ModelSummaryRowSchema>;
 
 export interface SkipWrite {
 	nearMissId: string;
@@ -92,6 +120,8 @@ const ENTRY_COLUMNS =
 	"id, user_id, category, display_name, normalized, vector_status, hit_count, alias_of, created_at, model, model_version, client";
 const NEAR_MISS_COLUMNS =
 	"id, user_id, claim_entry_id, matched_entry_id, via_entry_id, match_kind, score, verdict, note, created_at, decided_at";
+const OVERLAP_COLUMNS =
+	"id, user_id, claim_entry_id, matched_entry_id, via_entry_id, match_kind, score, created_at";
 const TOKEN_COLUMNS = "id, user_id, token_hash, label, created_at, last_used_at, revoked_at";
 
 const UserIdRow = z.object({ user_id: z.string() });
@@ -509,7 +539,8 @@ export class LedgerStore {
 		const { results } = await this.db
 			.prepare(
 				`SELECT n.id, n.created_at, c.display_name AS claim_name, c.alias_of AS claim_alias_of,
-				        m.display_name AS matched_name, m.category AS category, v.display_name AS via_name,
+				        c.model AS claim_model, m.display_name AS matched_name, m.model AS matched_model,
+				        m.category AS category, v.display_name AS via_name,
 				        n.match_kind, n.score, n.verdict, n.note
 				 FROM near_misses n
 				 JOIN entries c ON c.id = n.claim_entry_id
@@ -522,6 +553,88 @@ export class LedgerStore {
 			.bind(userId, limit)
 			.all();
 		return results.map((row) => NearMissViewSchema.parse(row));
+	}
+
+	async insertOverlaps(rows: readonly OverlapRow[]): Promise<void> {
+		if (rows.length === 0) return;
+		await this.db.batch(
+			rows.map((row) =>
+				this.db
+					.prepare(
+						`INSERT INTO overlaps (${OVERLAP_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+					)
+					.bind(
+						row.id,
+						row.user_id,
+						row.claim_entry_id,
+						row.matched_entry_id,
+						row.via_entry_id,
+						row.match_kind,
+						row.score,
+						row.created_at,
+					),
+			),
+		);
+	}
+
+	async listOverlapsForClaim(userId: string, claimEntryId: string): Promise<OverlapRow[]> {
+		const { results } = await this.db
+			.prepare(
+				`SELECT ${OVERLAP_COLUMNS} FROM overlaps WHERE user_id = ?1 AND claim_entry_id = ?2 ORDER BY score DESC`,
+			)
+			.bind(userId, claimEntryId)
+			.all();
+		return results.map((row) => OverlapRowSchema.parse(row));
+	}
+
+	async listOverlaps(userId: string, limit: number): Promise<OverlapView[]> {
+		const { results } = await this.db
+			.prepare(
+				`SELECT o.id, o.created_at, m.category AS category,
+				        c.display_name AS claim_name, c.model AS claim_model,
+				        m.display_name AS matched_name, m.model AS matched_model,
+				        v.display_name AS via_name, o.match_kind, o.score
+				 FROM overlaps o
+				 JOIN entries c ON c.id = o.claim_entry_id
+				 JOIN entries m ON m.id = o.matched_entry_id
+				 LEFT JOIN entries v ON v.id = o.via_entry_id
+				 WHERE o.user_id = ?1
+				 ORDER BY o.created_at DESC, o.score DESC
+				 LIMIT ?2`,
+			)
+			.bind(userId, limit)
+			.all();
+		return results.map((row) => OverlapViewSchema.parse(row));
+	}
+
+	/**
+	 * Originals and hits per model. Models group case-insensitively (SQLite lower() folds ASCII
+	 * only, matching NOCASE) and unattributed rows form one group, last.
+	 */
+	async modelSummary(userId: string): Promise<ModelSummaryRow[]> {
+		const { results } = await this.db
+			.prepare(
+				`WITH keys AS (
+				   SELECT lower(model) AS key FROM entries WHERE user_id = ?1
+				   UNION
+				   SELECT lower(model) FROM hits WHERE user_id = ?1
+				 )
+				 SELECT
+				   COALESCE(
+				     (SELECT e.model FROM entries e WHERE e.user_id = ?1 AND lower(e.model) IS k.key
+				      ORDER BY e.created_at DESC LIMIT 1),
+				     (SELECT h.model FROM hits h WHERE h.user_id = ?1 AND lower(h.model) IS k.key
+				      ORDER BY h.created_at DESC LIMIT 1)
+				   ) AS label,
+				   (SELECT COUNT(*) FROM entries e
+				    WHERE e.user_id = ?1 AND e.alias_of IS NULL AND lower(e.model) IS k.key) AS originals,
+				   (SELECT COUNT(*) FROM hits h WHERE h.user_id = ?1 AND lower(h.model) IS k.key) AS hits
+				 FROM keys k
+				 ORDER BY k.key IS NULL, k.key`,
+			)
+			.bind(userId)
+			.all();
+		return results.map((row) => ModelSummaryRowSchema.parse(row));
 	}
 
 	async insertToken(row: TokenRow): Promise<void> {
