@@ -6,6 +6,11 @@ export const UserRowSchema = z.object({
 	display_name: z.string().nullable(),
 	email: z.string().nullable(),
 	created_at: z.number(),
+	/** Stored as 0 or 1. True shares one ledger across all of the user's models. */
+	share_ledger: z
+		.number()
+		.int()
+		.transform((value) => value === 1),
 });
 export type UserRow = z.infer<typeof UserRowSchema>;
 
@@ -20,6 +25,12 @@ export const EntryRowSchema = z.object({
 	/** Null for an original topic; the original's id for an alias. */
 	alias_of: z.string().nullable(),
 	created_at: z.number(),
+	/** The declared model family. Null for an unattributed row, which belongs to every model. */
+	model: z.string().nullable(),
+	/** The declared model version: a label that never affects matching. */
+	model_version: z.string().nullable(),
+	/** The connection's name (token label or OAuth client name), kept for audit. */
+	client: z.string().nullable(),
 });
 export type EntryRow = z.infer<typeof EntryRowSchema>;
 
@@ -32,6 +43,9 @@ export const HitRowSchema = z.object({
 	match_kind: MatchKind,
 	score: z.number(),
 	created_at: z.number(),
+	/** The model that made the attempt. With a shared ledger it can differ from the entry's model. */
+	model: z.string().nullable(),
+	model_version: z.string().nullable(),
 });
 export type HitRow = z.infer<typeof HitRowSchema>;
 

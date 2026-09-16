@@ -49,6 +49,9 @@ export function makeEntry(
 		vector_status: "pending",
 		hit_count: 0,
 		alias_of: null,
+		model: null,
+		model_version: null,
+		client: null,
 		created_at: Date.now(),
 		...overrides,
 	};
@@ -67,6 +70,8 @@ export function makeHit(
 		candidate_normalized: normalize(candidate),
 		match_kind: "exact",
 		score: 1,
+		model: null,
+		model_version: null,
 		created_at: Date.now(),
 		...overrides,
 	};

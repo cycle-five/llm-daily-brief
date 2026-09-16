@@ -140,6 +140,8 @@ export class Ledger {
 				candidate_normalized: entry.normalized,
 				match_kind: row.match_kind,
 				score: row.score,
+				model: entry.model,
+				model_version: entry.model_version,
 				created_at: decidedAt,
 			},
 			note: input.note ?? null,
@@ -257,6 +259,8 @@ export class Ledger {
 				candidate_normalized: evaluation.normalized,
 				match_kind: best.kind,
 				score: best.score,
+				model: null,
+				model_version: null,
 				created_at: now(),
 			});
 			return {
@@ -276,6 +280,9 @@ export class Ledger {
 			hit_count: 0,
 			alias_of: null,
 			created_at: now(),
+			model: null,
+			model_version: null,
+			client: null,
 		};
 		if ((await store.insertEntry(entry)) === "duplicate") {
 			// A concurrent claim inserted the same normalized name; re-evaluating yields an exact repeat.
@@ -347,10 +354,10 @@ export class Ledger {
 		}
 		const candidates = await this.deps.store.listCandidates(userId, category);
 		const lexical = findLexicalMatches(normalized, candidates, this.deps.thresholds);
-		if (!lexical.some((match) => match.kind === "exact")) {
-			// listCandidates is windowed (CANDIDATE_SCAN_LIMIT); an exact match can lie outside it.
-			const exact = await this.deps.store.findExact(userId, category, normalized);
-			if (exact) lexical.push({ entry: exact, kind: "exact", score: 1, confidence: "repeat" });
+		// listCandidates is windowed (CANDIDATE_SCAN_LIMIT), so an exact match can lie outside it, and
+		// each model can hold its own copy. Ranking deduplicates an entry found both ways.
+		for (const exact of await this.deps.store.findExact(userId, category, normalized)) {
+			lexical.push({ entry: exact, kind: "exact", score: 1, confidence: "repeat" });
 		}
 		const semantic = await this.semanticMatches(userId, category, name, candidates);
 		const resolved = await this.withOriginals(

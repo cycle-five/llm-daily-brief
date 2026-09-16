@@ -35,6 +35,7 @@ const RepeatHitSchema = z.object({
 	candidate_text: z.string(),
 	match_kind: MatchKind,
 	score: z.number(),
+	model: z.string().nullable(),
 });
 export type RepeatHit = z.infer<typeof RepeatHitSchema>;
 
@@ -88,7 +89,7 @@ export const CANDIDATE_SCAN_LIMIT = 5000;
 const MAX_IN_LIST = 90;
 
 const ENTRY_COLUMNS =
-	"id, user_id, category, display_name, normalized, vector_status, hit_count, alias_of, created_at";
+	"id, user_id, category, display_name, normalized, vector_status, hit_count, alias_of, created_at, model, model_version, client";
 const NEAR_MISS_COLUMNS =
 	"id, user_id, claim_entry_id, matched_entry_id, via_entry_id, match_kind, score, verdict, note, created_at, decided_at";
 const TOKEN_COLUMNS = "id, user_id, token_hash, label, created_at, last_used_at, revoked_at";
@@ -148,10 +149,17 @@ export class LedgerStore {
 
 	async getUser(userId: string): Promise<UserRow | null> {
 		const row = await this.db
-			.prepare("SELECT id, display_name, email, created_at FROM users WHERE id = ?1")
+			.prepare("SELECT id, display_name, email, created_at, share_ledger FROM users WHERE id = ?1")
 			.bind(userId)
 			.first();
 		return row ? UserRowSchema.parse(row) : null;
+	}
+
+	async setShareLedger(userId: string, share: boolean): Promise<void> {
+		await this.db
+			.prepare("UPDATE users SET share_ledger = ?2 WHERE id = ?1")
+			.bind(userId, share ? 1 : 0)
+			.run();
 	}
 
 	async deleteUser(userId: string): Promise<string[]> {
@@ -177,14 +185,15 @@ export class LedgerStore {
 		return results.map((row) => EntryRowSchema.parse(row));
 	}
 
-	async findExact(userId: string, category: string, normalized: string): Promise<EntryRow | null> {
-		const row = await this.db
+	/** Every entry with this exact normalized name: at most one per model, plus one unattributed. */
+	async findExact(userId: string, category: string, normalized: string): Promise<EntryRow[]> {
+		const { results } = await this.db
 			.prepare(
 				`SELECT ${ENTRY_COLUMNS} FROM entries WHERE user_id = ?1 AND category = ?2 AND normalized = ?3`,
 			)
 			.bind(userId, category, normalized)
-			.first();
-		return row ? EntryRowSchema.parse(row) : null;
+			.all();
+		return results.map((row) => EntryRowSchema.parse(row));
 	}
 
 	async getEntry(userId: string, entryId: string): Promise<EntryRow | null> {
@@ -231,7 +240,7 @@ export class LedgerStore {
 		try {
 			await this.db
 				.prepare(
-					`INSERT INTO entries (${ENTRY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+					`INSERT INTO entries (${ENTRY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
 				)
 				.bind(
 					row.id,
@@ -243,6 +252,9 @@ export class LedgerStore {
 					row.hit_count,
 					row.alias_of,
 					row.created_at,
+					row.model,
+					row.model_version,
+					row.client,
 				)
 				.run();
 			return "inserted";
@@ -275,15 +287,22 @@ export class LedgerStore {
 
 	async listEntries(
 		userId: string,
-		options: { category?: string; limit: number; sinceMs?: number },
+		options: { category?: string; limit: number; sinceMs?: number; model?: string },
 	): Promise<EntryRow[]> {
 		const { results } = await this.db
 			.prepare(
 				`SELECT ${ENTRY_COLUMNS} FROM entries
 				 WHERE user_id = ?1 AND alias_of IS NULL AND (?2 IS NULL OR category = ?2) AND (?3 IS NULL OR created_at >= ?3)
+				   AND (?5 IS NULL OR model = ?5 COLLATE NOCASE)
 				 ORDER BY created_at DESC LIMIT ?4`,
 			)
-			.bind(userId, options.category ?? null, options.sinceMs ?? null, options.limit)
+			.bind(
+				userId,
+				options.category ?? null,
+				options.sinceMs ?? null,
+				options.limit,
+				options.model ?? null,
+			)
 			.all();
 		return results.map((row) => EntryRowSchema.parse(row));
 	}
@@ -300,8 +319,8 @@ export class LedgerStore {
 		await this.db.batch([
 			this.db
 				.prepare(
-					`INSERT INTO hits (id, entry_id, user_id, candidate_text, candidate_normalized, match_kind, score, created_at)
-					 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+					`INSERT INTO hits (id, entry_id, user_id, candidate_text, candidate_normalized, match_kind, score, created_at, model, model_version)
+					 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
 				)
 				.bind(
 					hit.id,
@@ -312,6 +331,8 @@ export class LedgerStore {
 					hit.match_kind,
 					hit.score,
 					hit.created_at,
+					hit.model,
+					hit.model_version,
 				),
 			this.db
 				.prepare("UPDATE entries SET hit_count = hit_count + 1 WHERE id = ?1")
@@ -323,14 +344,16 @@ export class LedgerStore {
 		userId: string,
 		category: string | undefined,
 		limit: number,
+		model?: string,
 	): Promise<UserRepeatRow[]> {
 		const { results } = await this.db
 			.prepare(
 				`SELECT ${ENTRY_COLUMNS} FROM entries
 				 WHERE user_id = ?1 AND alias_of IS NULL AND hit_count > 0 AND (?2 IS NULL OR category = ?2)
+				   AND (?4 IS NULL OR model = ?4 COLLATE NOCASE)
 				 ORDER BY hit_count DESC, created_at DESC LIMIT ?3`,
 			)
-			.bind(userId, category ?? null, limit)
+			.bind(userId, category ?? null, limit, model ?? null)
 			.all();
 		const entries = results.map((row) => EntryRowSchema.parse(row));
 		const hitsByEntry = new Map<string, RepeatHit[]>(entries.map((entry) => [entry.id, []]));
@@ -340,7 +363,7 @@ export class LedgerStore {
 		)) {
 			const hits = await this.db
 				.prepare(
-					`SELECT entry_id, candidate_text, match_kind, score FROM hits WHERE entry_id IN (${placeholders(batch.length, 1)}) ORDER BY created_at DESC`,
+					`SELECT entry_id, candidate_text, match_kind, score, model FROM hits WHERE entry_id IN (${placeholders(batch.length, 1)}) ORDER BY created_at DESC`,
 				)
 				.bind(...batch)
 				.all();
@@ -352,6 +375,7 @@ export class LedgerStore {
 						candidate_text: hit.candidate_text,
 						match_kind: hit.match_kind,
 						score: hit.score,
+						model: hit.model,
 					});
 				}
 			}
@@ -429,8 +453,8 @@ export class LedgerStore {
 		const results = await this.db.batch([
 			this.db
 				.prepare(
-					`INSERT INTO hits (id, entry_id, user_id, candidate_text, candidate_normalized, match_kind, score, created_at)
-					 SELECT ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9 WHERE ${skipOpen(1, 4)}`,
+					`INSERT INTO hits (id, entry_id, user_id, candidate_text, candidate_normalized, match_kind, score, created_at, model, model_version)
+					 SELECT ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11 WHERE ${skipOpen(1, 4)}`,
 				)
 				.bind(
 					write.nearMissId,
@@ -442,6 +466,8 @@ export class LedgerStore {
 					hit.match_kind,
 					hit.score,
 					hit.created_at,
+					hit.model,
+					hit.model_version,
 				),
 			this.db
 				.prepare(`UPDATE entries SET hit_count = hit_count + 1 WHERE id = ?2 AND ${skipOpen(1, 3)}`)

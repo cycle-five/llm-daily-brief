@@ -1,3 +1,4 @@
+import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { makeEntry, makeHit, makeNearMiss, seedUser, testStore, uniqueCategory } from "./helpers";
 
@@ -25,6 +26,7 @@ describe("users and identities", () => {
 			display_name: "A",
 			email: "a@example.com",
 			created_at: 1,
+			share_ledger: true,
 		});
 	});
 
@@ -68,7 +70,7 @@ describe("entries", () => {
 		]);
 	});
 
-	it("findExact returns the matching row for the owner and null for another user or category", async () => {
+	it("findExact returns every matching row for the owner, and none for another user or category", async () => {
 		const store = testStore();
 		const alice = await seedUser("alice");
 		const bob = await seedUser("bob");
@@ -76,9 +78,9 @@ describe("entries", () => {
 		const entry = makeEntry(alice, category, "Euler's Identity");
 		await store.insertEntry(entry);
 
-		expect(await store.findExact(alice, category, entry.normalized)).toEqual(entry);
-		expect(await store.findExact(bob, category, entry.normalized)).toBeNull();
-		expect(await store.findExact(alice, uniqueCategory(), entry.normalized)).toBeNull();
+		expect(await store.findExact(alice, category, entry.normalized)).toEqual([entry]);
+		expect(await store.findExact(bob, category, entry.normalized)).toEqual([]);
+		expect(await store.findExact(alice, uniqueCategory(), entry.normalized)).toEqual([]);
 	});
 
 	it("getEntriesByIds ignores other users' and other categories' ids", async () => {
@@ -326,7 +328,7 @@ describe("near misses", () => {
 		expect(repeat?.entry.id).toBe(original.id);
 		expect(repeat?.entry.hit_count).toBe(1);
 		expect(repeat?.hits).toEqual([
-			{ candidate_text: "Alhazen", match_kind: "semantic", score: 0.9 },
+			{ candidate_text: "Alhazen", match_kind: "semantic", score: 0.9, model: null },
 		]);
 		expect(await store.listNearMissesForClaim(userId, claim.id)).toEqual([
 			{ ...toOriginal, verdict: "repeat", note: "same person", decided_at: 10 },
@@ -454,5 +456,115 @@ describe("near misses", () => {
 			note: null,
 		});
 		expect(await store.listNearMisses(await seedUser("other"), 20)).toEqual([]);
+	});
+});
+
+describe("model attribution", () => {
+	it("stores model, version and client, and allows a topic once per model", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const claude = makeEntry(userId, category, "Stone duality", {
+			model: "Claude",
+			model_version: "Opus 5",
+			client: "Claude",
+		});
+		const grok = makeEntry(userId, category, "Stone duality", {
+			model: "Grok",
+			client: "openclaw",
+		});
+
+		expect(await store.insertEntry(claude)).toBe("inserted");
+		expect(await store.insertEntry(grok)).toBe("inserted");
+		expect(
+			await store.insertEntry(makeEntry(userId, category, "Stone duality", { model: "CLAUDE" })),
+		).toBe("duplicate");
+
+		expect(await store.getEntry(userId, claude.id)).toEqual(claude);
+		const exact = await store.findExact(userId, category, claude.normalized);
+		expect(exact).toHaveLength(2);
+		expect(exact).toEqual(expect.arrayContaining([claude, grok]));
+	});
+
+	it("records the attempting model on hits from recordHit and skipAsAlias, and filters repeats by model", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const euler = makeEntry(userId, category, "Euler", { model: "Claude" });
+		const gauss = makeEntry(userId, category, "Gauss", { model: "Grok" });
+		const claim = makeEntry(userId, category, "Carl Gauss", { model: "Grok" });
+		for (const entry of [euler, gauss, claim]) await store.insertEntry(entry);
+		const eulerHit = makeHit(euler, "euler", {
+			model: "Grok",
+			model_version: "Grok 4",
+			created_at: 1,
+		});
+		await store.recordHit(eulerHit);
+		const toGauss = makeNearMiss(claim, gauss);
+		await store.insertNearMisses([toGauss]);
+		expect(
+			await store.skipAsAlias({
+				nearMissId: toGauss.id,
+				claimEntryId: claim.id,
+				hit: makeHit(gauss, "Carl Gauss", {
+					match_kind: "semantic",
+					score: 0.8,
+					model: "Grok",
+					model_version: "Grok 4",
+					created_at: 2,
+				}),
+				note: null,
+				decidedAt: 2,
+			}),
+		).toBe(true);
+
+		expect(
+			await env.DB.prepare("SELECT model, model_version FROM hits WHERE entry_id = ?1")
+				.bind(gauss.id)
+				.first(),
+		).toEqual({ model: "Grok", model_version: "Grok 4" });
+		expect(
+			await env.DB.prepare("SELECT model, model_version FROM hits WHERE id = ?1")
+				.bind(eulerHit.id)
+				.first(),
+		).toEqual({ model: "Grok", model_version: "Grok 4" });
+		const [eulerRepeat] = await store.topRepeatsForUser(userId, category, 10, "claude");
+		expect(eulerRepeat?.entry.id).toBe(euler.id);
+		expect(eulerRepeat?.hits).toEqual([
+			{ candidate_text: "euler", match_kind: "exact", score: 1, model: "Grok" },
+		]);
+		expect(
+			(await store.topRepeatsForUser(userId, category, 10, "GROK")).map((row) => row.entry.id),
+		).toEqual([gauss.id]);
+		expect(await store.topRepeatsForUser(userId, category, 10)).toHaveLength(2);
+	});
+
+	it("flips the share switch, which starts on", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		expect((await store.getUser(userId))?.share_ledger).toBe(true);
+		await store.setShareLedger(userId, false);
+		expect((await store.getUser(userId))?.share_ledger).toBe(false);
+		await store.setShareLedger(userId, true);
+		expect((await store.getUser(userId))?.share_ledger).toBe(true);
+	});
+
+	it("filters listEntries by model case-insensitively, leaving unattributed rows to the unfiltered list", async () => {
+		const store = testStore();
+		const userId = await seedUser();
+		const category = uniqueCategory();
+		const claude = makeEntry(userId, category, "Hilbert", { model: "Claude", created_at: 1 });
+		const grok = makeEntry(userId, category, "Cantor", { model: "Grok", created_at: 2 });
+		const legacy = makeEntry(userId, category, "Riemann", { created_at: 3 });
+		for (const entry of [claude, grok, legacy]) await store.insertEntry(entry);
+
+		expect(
+			(await store.listEntries(userId, { category, limit: 10, model: "grok" })).map((e) => e.id),
+		).toEqual([grok.id]);
+		expect((await store.listEntries(userId, { category, limit: 10 })).map((e) => e.id)).toEqual([
+			legacy.id,
+			grok.id,
+			claude.id,
+		]);
 	});
 });
