@@ -3,7 +3,16 @@ import { LedgerError } from "../core/errors";
 import type { ApiContext } from "./context";
 import { errorResponse } from "./errors";
 import { enforceRateLimit } from "./ratelimit";
-import { CheckInput, ClaimInput, ListInput, StatsInput } from "./schemas";
+import {
+	CheckInput,
+	ClaimInput,
+	KeepBody,
+	type KeepInput,
+	ListInput,
+	SkipBody,
+	type SkipInput,
+	StatsInput,
+} from "./schemas";
 import { parseInput } from "./validate";
 
 async function readJson(request: Request): Promise<unknown> {
@@ -32,6 +41,18 @@ export function createRestApp() {
 	app.get("/entries", async (c) => {
 		const input = parseInput(ListInput, c.req.query());
 		return c.json(await c.env.ledger.list(c.env.userId, input));
+	});
+
+	app.post("/entries/:id/skip", async (c) => {
+		const body = parseInput(SkipBody, await readJson(c.req.raw));
+		const input: SkipInput = { ...body, entry_id: c.req.param("id") };
+		return c.json(await c.env.ledger.skip(c.env.userId, input));
+	});
+
+	app.post("/entries/:id/keep", async (c) => {
+		const body = parseInput(KeepBody, await readJson(c.req.raw));
+		const input: KeepInput = { ...body, entry_id: c.req.param("id") };
+		return c.json(await c.env.ledger.keep(c.env.userId, input));
 	});
 
 	app.delete("/entries/:id", async (c) => {

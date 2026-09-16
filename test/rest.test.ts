@@ -2,7 +2,16 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import type { ApiContext } from "../src/api/context";
 import { createRestApp } from "../src/api/rest";
-import { CheckResult, ClaimResult, ErrorBody, ListResult, StatsResult } from "../src/api/schemas";
+import {
+	CheckResult,
+	ClaimResult,
+	ErrorBody,
+	KeepResult,
+	ListResult,
+	SkipResult,
+	StatsResult,
+} from "../src/api/schemas";
+import { FakeSemanticIndex } from "./fakes/semantic";
 import { makeTestLedger, seedUser, uniqueCategory } from "./helpers";
 
 async function context(overrides: Partial<ApiContext> = {}): Promise<ApiContext> {
@@ -149,5 +158,69 @@ describe("unknown routes", () => {
 		const res = await createRestApp().request("/api/v1/nope", {}, await context());
 		expect(res.status).toBe(404);
 		expect(ErrorBody.parse(await res.json()).error.code).toBe("not_found");
+	});
+});
+
+describe("verdicts", () => {
+	async function claim(ctx: ApiContext, category: string, name: string) {
+		return ClaimResult.parse(await (await post("/api/v1/claims", { category, name }, ctx)).json());
+	}
+
+	it("skips one possible repeat and keeps another", async () => {
+		const semantic = new FakeSemanticIndex();
+		const ctx = await context({ ledger: makeTestLedger({ semantic }) });
+		const category = uniqueCategory();
+		const original = await claim(ctx, category, "Ibn al-Haytham");
+		if (original.status !== "claimed") throw new Error("expected claimed");
+		semantic.setSimilarity("Ibn al-Haytham", "Alhazen", 0.9);
+		semantic.setSimilarity("Ibn al-Haytham", "Omar Khayyam", 0.81);
+
+		const alhazen = await claim(ctx, category, "Alhazen");
+		if (alhazen.status !== "possible_repeat") throw new Error("expected possible_repeat");
+		const skipped = await post(
+			`/api/v1/entries/${alhazen.entry.id}/skip`,
+			{ repeat_of: original.entry.id, note: "same person" },
+			ctx,
+		);
+		expect(skipped.status).toBe(200);
+		expect(SkipResult.parse(await skipped.json())).toMatchObject({
+			skipped: alhazen.entry.id,
+			alias_of: { entry_id: original.entry.id, hit_count: 1 },
+		});
+
+		const khayyam = await claim(ctx, category, "Omar Khayyam");
+		if (khayyam.status !== "possible_repeat") throw new Error("expected possible_repeat");
+		const kept = await post(
+			`/api/v1/entries/${khayyam.entry.id}/keep`,
+			{ note: "different people" },
+			ctx,
+		);
+		expect(kept.status).toBe(200);
+		expect(KeepResult.parse(await kept.json())).toEqual({ kept: khayyam.entry.id, distinct: 1 });
+	});
+
+	it("validates bodies and maps verdict errors", async () => {
+		const ctx = await context();
+
+		const missing = await post(
+			`/api/v1/entries/${crypto.randomUUID()}/skip`,
+			{ note: "no repeat_of" },
+			ctx,
+		);
+		expect(missing.status).toBe(400);
+		expect(ErrorBody.parse(await missing.json()).error.code).toBe("invalid_input");
+
+		const blankNote = await post(`/api/v1/entries/${crypto.randomUUID()}/keep`, { note: " " }, ctx);
+		expect(blankNote.status).toBe(400);
+
+		const unknown = await post(`/api/v1/entries/${crypto.randomUUID()}/keep`, {}, ctx);
+		expect(unknown.status).toBe(404);
+		expect(ErrorBody.parse(await unknown.json()).error.code).toBe("not_found");
+
+		const plain = await claim(ctx, uniqueCategory(), "Hilbert");
+		if (plain.status !== "claimed") throw new Error("expected claimed");
+		const nothingPending = await post(`/api/v1/entries/${plain.entry.id}/keep`, {}, ctx);
+		expect(nothingPending.status).toBe(400);
+		expect(ErrorBody.parse(await nothingPending.json()).error.code).toBe("invalid_input");
 	});
 });

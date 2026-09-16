@@ -5,9 +5,9 @@ import { enforceRateLimit } from "./ratelimit";
 import {
 	CheckInput,
 	ClaimInput,
-	ForgetInput,
-	type ForgetResult,
+	KeepInput,
 	ListToolInput,
+	SkipInput,
 	StatsToolInput,
 } from "./schemas";
 
@@ -17,7 +17,8 @@ export const MCP_TOOL_NAMES = [
 	"claim_topic",
 	"check_topic",
 	"list_topics",
-	"forget_topic",
+	"skip_topic",
+	"keep_topic",
 	"topic_stats",
 ] as const;
 
@@ -51,9 +52,9 @@ export function buildMcpServer(api: ApiContext): McpServer {
 			title: "Claim a topic",
 			description:
 				"Record a topic for this category unless it repeats one already used. " +
-				'Returns status "claimed" or "repeat". On "repeat", pick a different topic and call again. ' +
-				"If a claimed result lists possible_matches you judge to be the same topic, call forget_topic " +
-				"on the new entry and pick again. force=true overrides fuzzy (not exact) matches.",
+				'Returns status "claimed", "possible_repeat" or "repeat". On "repeat", pick a different topic and call again. ' +
+				'On "possible_repeat" the topic is recorded but resembles earlier topics: follow next_step and call ' +
+				"skip_topic (same topic) or keep_topic (different topic). force=true overrides fuzzy (not exact) matches.",
 			inputSchema: ClaimInput,
 			annotations: { readOnlyHint: false, idempotentHint: false },
 		},
@@ -92,19 +93,31 @@ export function buildMcpServer(api: ApiContext): McpServer {
 	);
 
 	server.registerTool(
-		"forget_topic",
+		"skip_topic",
 		{
-			title: "Forget a topic",
-			description: "Delete a claimed topic and its repeat history.",
-			inputSchema: ForgetInput,
-			annotations: { readOnlyHint: false, destructiveHint: true },
+			title: "Skip a repeated topic",
+			description:
+				'Use after claim_topic returned "possible_repeat" and you judge the topic to be the same as one of its ' +
+				"possible_matches. Records a repeat of that match (repeat_of = its entry_id) and turns your new entry " +
+				"into an alias of it, so the same phrasing is refused next time. Then choose a different topic.",
+			inputSchema: SkipInput,
+			// Not destructive: it only converts the caller's own new claim into an alias and records a hit.
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
 		},
-		async (args) =>
-			run(async () => {
-				await api.ledger.forget(api.userId, args.entry_id);
-				const result: ForgetResult = { forgotten: args.entry_id };
-				return result;
-			}),
+		async (args) => run(() => api.ledger.skip(api.userId, args)),
+	);
+
+	server.registerTool(
+		"keep_topic",
+		{
+			title: "Keep a topic",
+			description:
+				'Use after claim_topic returned "possible_repeat" and you judge the topic to be different from every ' +
+				"possible match. Records that verdict; the topic stays claimed.",
+			inputSchema: KeepInput,
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+		},
+		async (args) => run(() => api.ledger.keep(api.userId, args)),
 	);
 
 	server.registerTool(

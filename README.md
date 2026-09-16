@@ -5,14 +5,21 @@ Before the brief writes about a math topic or a historical figure, it *claims* t
 topic here. Exact repeats and spelling variants are refused, and every refused
 attempt is counted, so you can see which topics the model keeps wanting to come
 back to. Rephrasings — like "Euler's identity" vs "e^(iπ)+1=0" — come back as
-`possible_matches` for the brief to judge (see [`docs/calibration.md`](docs/calibration.md)
-for why meaning-based matches are advisory rather than blocking).
+`possible_repeat`, and the brief answers with `skip_topic` (same topic: counted as a repeat,
+and the phrasing becomes an alias that is refused outright next time) or `keep_topic`
+(different topic). Every such verdict is listed on the dashboard's **Near misses** page; see
+[`docs/calibration.md`](docs/calibration.md) for why meaning-based matches ask for a verdict
+instead of blocking.
 
 - **MCP** (claude.ai connectors, openclaw): `https://ledger.twkr.io/mcp`
 - **REST** (cron, scripts): `https://ledger.twkr.io/api/v1`
 - **Dashboard:** `https://ledger.twkr.io`
 
-Design: [`docs/superpowers/specs/2026-09-14-topic-ledger-design.md`](docs/superpowers/specs/2026-09-14-topic-ledger-design.md)
+MCP tools: `claim_topic`, `check_topic`, `list_topics`, `skip_topic`, `keep_topic`,
+`topic_stats`. Erasing a topic is only possible from the dashboard or REST.
+
+Design: [`docs/superpowers/specs/2026-09-14-topic-ledger-design.md`](docs/superpowers/specs/2026-09-14-topic-ledger-design.md),
+amended by [`docs/superpowers/specs/2026-09-15-near-misses-design.md`](docs/superpowers/specs/2026-09-15-near-misses-design.md)
 
 ## Connect your brief
 
@@ -37,10 +44,12 @@ curl -X POST https://ledger.twkr.io/api/v1/claims \
 
 | Method | Path | Body / query | Result |
 |---|---|---|---|
-| POST | `/api/v1/claims` | `{category, name, force?}` | `{status: "claimed", entry, forced, possible_matches, semantic}` or `{status: "repeat", matches, semantic}` |
+| POST | `/api/v1/claims` | `{category, name, force?}` | `{status: "claimed", entry, forced, overridden_matches, semantic}`, `{status: "possible_repeat", entry, possible_matches, next_step, semantic}` or `{status: "repeat", matches, semantic}` |
 | POST | `/api/v1/checks` | `{category, name}` | `{likely_repeat, matches, semantic}` (records nothing) |
-| GET | `/api/v1/entries` | `?category=&limit=&since=` | `{entries}` |
-| DELETE | `/api/v1/entries/:id` | — | 204 |
+| GET | `/api/v1/entries` | `?category=&limit=&since=` | `{entries}` (original topics only) |
+| POST | `/api/v1/entries/:id/skip` | `{repeat_of, note?}` | `{skipped, alias_of}`: the entry becomes an alias of `repeat_of` and a hit is recorded |
+| POST | `/api/v1/entries/:id/keep` | `{note?}` | `{kept, distinct}` |
+| DELETE | `/api/v1/entries/:id` | — | 204; erases the topic with its hits, aliases and near misses |
 | GET | `/api/v1/stats` | `?scope=me\|global&category=&limit=` | `{scope, repeats}` |
 
 Errors are `{error: {code, message}}` with codes `unauthorized` (401),

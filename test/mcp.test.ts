@@ -1,8 +1,25 @@
 import { SELF } from "cloudflare:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it } from "vitest";
-import { CheckResult, ClaimResult, ErrorBody, ListResult, StatsResult } from "../src/api/schemas";
-import { createTestToken, issueOAuthTokens, ORIGIN, seedUser, uniqueCategory } from "./helpers";
+import {
+	CheckResult,
+	ClaimResult,
+	ErrorBody,
+	KeepResult,
+	ListResult,
+	SkipResult,
+	StatsResult,
+} from "../src/api/schemas";
+import {
+	createTestToken,
+	issueOAuthTokens,
+	makeEntry,
+	makeNearMiss,
+	ORIGIN,
+	seedUser,
+	testStore,
+	uniqueCategory,
+} from "./helpers";
 
 const open: Client[] = [];
 
@@ -34,14 +51,15 @@ async function call(client: Client, name: string, args: Record<string, unknown>)
 }
 
 describe("MCP endpoint", () => {
-	it("lists the five ledger tools", async () => {
+	it("lists the six ledger tools", async () => {
 		const client = await connect(await createTestToken(await seedUser()));
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
 			"check_topic",
 			"claim_topic",
-			"forget_topic",
+			"keep_topic",
 			"list_topics",
+			"skip_topic",
 			"topic_stats",
 		]);
 	});
@@ -92,7 +110,7 @@ describe("MCP endpoint", () => {
 
 	it("returns a typed tool error for an unknown entry", async () => {
 		const client = await connect(await createTestToken(await seedUser()));
-		const result = await call(client, "forget_topic", { entry_id: crypto.randomUUID() });
+		const result = await call(client, "keep_topic", { entry_id: crypto.randomUUID() });
 		expect(result.isError).toBe(true);
 		expect(ErrorBody.parse(result.structuredContent).error.code).toBe("not_found");
 	});
@@ -110,7 +128,7 @@ describe("MCP endpoint", () => {
 	it("accepts OAuth access tokens", async () => {
 		const { accessToken } = await issueOAuthTokens(await seedUser());
 		const client = await connect(accessToken);
-		expect((await client.listTools()).tools).toHaveLength(5);
+		expect((await client.listTools()).tools).toHaveLength(6);
 	});
 
 	it("refuses unauthenticated connections", async () => {
@@ -137,5 +155,42 @@ describe("MCP endpoint", () => {
 		);
 		expect(list.entries).toHaveLength(1);
 		expect(list.entries[0]?.category).toBe(category);
+	});
+
+	it("skips and keeps flagged claims, and the skipped phrasing then repeats exactly", async () => {
+		const userId = await seedUser();
+		const client = await connect(await createTestToken(userId));
+		const category = uniqueCategory();
+		const store = testStore();
+		// The test Worker has no semantic binding, so flagged claims are seeded directly.
+		const original = makeEntry(userId, category, "Ibn al-Haytham");
+		const alhazen = makeEntry(userId, category, "Alhazen");
+		const khayyam = makeEntry(userId, category, "Omar Khayyam");
+		for (const entry of [original, alhazen, khayyam]) await store.insertEntry(entry);
+		await store.insertNearMisses([
+			makeNearMiss(alhazen, original, { score: 0.9 }),
+			makeNearMiss(khayyam, original, { score: 0.81 }),
+		]);
+
+		const skipped = await call(client, "skip_topic", {
+			entry_id: alhazen.id,
+			repeat_of: original.id,
+			note: "same person",
+		});
+		expect(SkipResult.parse(skipped.structuredContent)).toMatchObject({
+			skipped: alhazen.id,
+			alias_of: { entry_id: original.id, hit_count: 1 },
+		});
+
+		const kept = await call(client, "keep_topic", { entry_id: khayyam.id });
+		expect(KeepResult.parse(kept.structuredContent)).toEqual({ kept: khayyam.id, distinct: 1 });
+
+		const repeat = ClaimResult.parse(
+			(await call(client, "claim_topic", { category, name: "alhazen" })).structuredContent,
+		);
+		expect(repeat).toMatchObject({
+			status: "repeat",
+			matches: [{ entry_id: original.id, via_alias: "Alhazen" }],
+		});
 	});
 });

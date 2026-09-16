@@ -99,9 +99,6 @@ export type ListInput = z.infer<typeof ListInput>;
 export const ListResult = z.object({ entries: z.array(Entry) });
 export type ListResult = z.infer<typeof ListResult>;
 
-export const ForgetInput = z.object({ entry_id: z.string().min(1) });
-export type ForgetInput = z.infer<typeof ForgetInput>;
-
 const EntryId = z.string().min(1);
 const Note = z.string().trim().min(1).max(500);
 
@@ -167,6 +164,3 @@ export type ListToolInput = z.infer<typeof ListToolInput>;
 
 export const StatsToolInput = StatsInput.extend({ limit: ToolLimit });
 export type StatsToolInput = z.infer<typeof StatsToolInput>;
-
-export const ForgetResult = z.object({ forgotten: z.string() });
-export type ForgetResult = z.infer<typeof ForgetResult>;
