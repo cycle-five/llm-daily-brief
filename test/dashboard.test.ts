@@ -40,6 +40,17 @@ async function post(
 	);
 }
 
+/** The single <tr> whose claim cell is `claim` and whose matched topic is `matched`. */
+function rowFor(html: string, claim: string, matched: string): string {
+	const rows = html
+		.split("<tr>")
+		.filter((row) => row.includes(`<td>${claim}</td>`) && row.includes(matched));
+	if (rows.length !== 1) {
+		throw new Error(`expected exactly one row for ${claim} / ${matched}, got ${rows.length}`);
+	}
+	return rows[0] ?? "";
+}
+
 describe("landing and session gate", () => {
 	it("shows sign-in to visitors, redirects signed-in users, and gates pages", async () => {
 		const landing = await get("/");
@@ -195,17 +206,14 @@ describe("near misses page", () => {
 		if (optics.status !== "possible_repeat") throw new Error("expected possible_repeat");
 
 		const html = await (await get("/near-misses", cookie)).text();
-		for (const text of [
-			"Repeat — skipped",
-			"Different — kept",
-			"No verdict — used",
-			"Not judged — claim skipped",
-			"via Alhazen",
-			"different people",
-			'href="/near-misses"',
-		]) {
-			expect(html).toContain(text);
-		}
+		expect(html).toContain("via Alhazen");
+		expect(html).toContain("different people");
+		expect(html).toContain('href="/near-misses"');
+
+		expect(rowFor(html, "Alhazen", "Ibn al-Haytham")).toContain("Repeat — skipped");
+		expect(rowFor(html, "Omar Khayyam", "Ibn al-Haytham")).toContain("Different — kept");
+		expect(rowFor(html, "Father of optics", "Ibn al-Haytham")).toContain("No verdict — used");
+		expect(rowFor(html, "Alhazen", "Omar Khayyam")).toContain("Not judged — claim skipped");
 
 		const ledgerHtml = await (await get("/ledger", cookie)).text();
 		expect(ledgerHtml).toContain("also claimed as: Alhazen");
