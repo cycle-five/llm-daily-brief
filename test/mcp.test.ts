@@ -2,7 +2,7 @@ import { SELF } from "cloudflare:test";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
-import { CLAIM_FIRST_NOTE } from "../src/api/mcp";
+import { CLAIM_FIRST_NOTE, MSC_CLASS_DESCRIPTION } from "../src/api/mcp";
 import {
 	CheckResult,
 	ClaimResult,
@@ -12,9 +12,11 @@ import {
 	MODEL_DESCRIPTION,
 	MODEL_FILTER_DESCRIPTION,
 	MODEL_VERSION_DESCRIPTION,
+	MscClassResult,
 	SkipResult,
 	StatsResult,
 } from "../src/api/schemas";
+import { MSC_CLASSES } from "../src/core/msc";
 import {
 	createTestToken,
 	issueOAuthTokens,
@@ -61,7 +63,7 @@ const ToolSchema = z.object({
 });
 
 describe("MCP endpoint", () => {
-	it("lists the six ledger tools", async () => {
+	it("lists the seven ledger tools", async () => {
 		const client = await connect(await createTestToken(await seedUser()));
 		const { tools } = await client.listTools();
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
@@ -69,9 +71,22 @@ describe("MCP endpoint", () => {
 			"claim_topic",
 			"keep_topic",
 			"list_topics",
+			"msc_class",
 			"skip_topic",
 			"topic_stats",
 		]);
+		expect(tools.find((tool) => tool.name === "msc_class")?.description).toBe(
+			MSC_CLASS_DESCRIPTION,
+		);
+	});
+
+	it("returns today's MSC class and records nothing", async () => {
+		const client = await connect(await createTestToken(await seedUser()));
+		const result = MscClassResult.parse((await call(client, "msc_class", {})).structuredContent);
+		expect(result.timezone).toBe("America/New_York");
+		expect(result.index).toBe(((result.n % 63) + 63) % 63);
+		expect(result.heading).toBe(`MSC ${result.code} · ${result.title}`);
+		expect(MSC_CLASSES[result.index]).toEqual({ code: result.code, title: result.title });
 	});
 
 	it("tells the read tools not to pre-browse, so a repeat is counted rather than avoided", async () => {
@@ -154,7 +169,7 @@ describe("MCP endpoint", () => {
 	it("accepts OAuth access tokens", async () => {
 		const { accessToken } = await issueOAuthTokens(await seedUser());
 		const client = await connect(accessToken);
-		expect((await client.listTools()).tools).toHaveLength(6);
+		expect((await client.listTools()).tools).toHaveLength(7);
 	});
 
 	it("refuses unauthenticated connections", async () => {

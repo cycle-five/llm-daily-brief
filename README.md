@@ -15,8 +15,9 @@ instead of blocking.
 - **REST** (cron, scripts): `https://ledger.twkr.io/api/v1`
 - **Dashboard:** `https://ledger.twkr.io`
 
-MCP tools: `claim_topic`, `check_topic`, `list_topics`, `skip_topic`, `keep_topic`,
-`topic_stats`. Erasing a topic is only possible from the dashboard or REST.
+MCP tools: `msc_class`, `claim_topic`, `check_topic`, `list_topics`, `skip_topic`, `keep_topic`,
+`topic_stats`. `msc_class` only names today's MSC2020 class; it records nothing. Erasing a topic
+is only possible from the dashboard or REST.
 
 Design: [`docs/superpowers/specs/2026-09-14-topic-ledger-design.md`](docs/superpowers/specs/2026-09-14-topic-ledger-design.md),
 amended by [`docs/superpowers/specs/2026-09-15-near-misses-design.md`](docs/superpowers/specs/2026-09-15-near-misses-design.md)
@@ -29,7 +30,9 @@ amended by [`docs/superpowers/specs/2026-09-15-near-misses-design.md`](docs/supe
 2. Sign in with GitHub or Google and approve.
 3. Add this to the scheduled task's prompt:
 
-> Before writing the math section, choose a topic on your own, without calling list_topics or check_topic first, then call claim_topic with category "math" and the topic's common name. Claiming blind is what makes the repeat counter meaningful. If the result is "repeat", choose a different topic and call again, up to 5 times. If the result is "possible_repeat", decide whether your topic is the same as any listed match: if it is, call skip_topic with repeat_of set to that match's entry_id and choose again; if not, call keep_topic. Include a short note with either call. Do the same with category "person" for the historical figure.
+> For the math section, call msc_class and stay inside the class it returns. It is the fixed rotation through all 63 MSC2020 top-level classes; do not compute the index yourself. Within that class, pick one specific named theorem, object, construction or result that genuinely belongs to it (prefer something less famous over the obvious headline result). Show the class under the section heading as the heading it returned, like "MSC 26 · Real functions". Before writing the math section, choose that topic on your own, without calling list_topics or check_topic first, then call claim_topic with category "math" and the topic's common name. Claiming blind is what makes the repeat counter meaningful. If the result is "repeat", choose a different topic and call again, up to 5 times. If the result is "possible_repeat", decide whether your topic is the same as any listed match: if it is, call skip_topic with repeat_of set to that match's entry_id and choose again; if not, call keep_topic. Include a short note with either call. Do the same with category "person" for the historical figure.
+
+`msc_class` (and `GET /api/v1/msc`) is that rotation: days from 2000-01-01 to today in America/New_York, modulo 63. 2026-10-13 is index 17, MSC 26 Real functions. The brief still chooses and claims the topic inside the class; the call only names the class.
 
 ### Scripts and cron
 
@@ -50,6 +53,7 @@ curl -X POST https://ledger.twkr.io/api/v1/claims \
 | POST | `/api/v1/entries/:id/skip` | `{repeat_of, note?}` | `{skipped, alias_of}`: the entry becomes an alias of `repeat_of` and a hit is recorded |
 | POST | `/api/v1/entries/:id/keep` | `{note?}` | `{kept, distinct}` |
 | DELETE | `/api/v1/entries/:id` | — | 204; erases the topic with its hits, aliases, near misses and overlaps |
+| GET | `/api/v1/msc` | — | `{date, timezone, n, index, code, title, heading}` for today in America/New_York (records nothing) |
 | GET | `/api/v1/stats` | `?scope=me\|global&category=&limit=&model=` | `{scope, repeats}` |
 
 `model` defaults to the connection name: a personal token's label, or an OAuth client's registered
