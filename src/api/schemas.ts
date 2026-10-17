@@ -174,6 +174,18 @@ export const StatsResult = z.object({
 });
 export type StatsResult = z.infer<typeof StatsResult>;
 
+/** Today's MSC2020 class. Records nothing; the brief still claims a topic inside it. */
+export const MscClassResult = z.object({
+	date: z.string(),
+	timezone: z.literal("America/New_York"),
+	n: z.number().int(),
+	index: z.number().int(),
+	code: z.string(),
+	title: z.string(),
+	heading: z.string(),
+});
+export type MscClassResult = z.infer<typeof MscClassResult>;
+
 export const ErrorCode = z.enum([
 	"unauthorized",
 	"invalid_input",

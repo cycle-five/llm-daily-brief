@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { LedgerError } from "../core/errors";
+import { mscClass } from "../core/msc";
 import type { ApiContext } from "./context";
 import { errorResponse } from "./errors";
 import { enforceRateLimit } from "./ratelimit";
@@ -65,6 +66,8 @@ export function createRestApp() {
 		await c.env.ledger.forget(c.env.userId, c.req.param("id"));
 		return c.body(null, 204);
 	});
+
+	app.get("/msc", (c) => c.json(mscClass(new Date())));
 
 	app.get("/stats", async (c) => {
 		const input = parseInput(StatsInput, c.req.query());

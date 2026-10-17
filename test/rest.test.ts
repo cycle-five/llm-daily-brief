@@ -8,6 +8,7 @@ import {
 	ErrorBody,
 	KeepResult,
 	ListResult,
+	MscClassResult,
 	SkipResult,
 	StatsResult,
 } from "../src/api/schemas";
@@ -132,6 +133,17 @@ describe("entries", () => {
 		);
 		expect(again.status).toBe(404);
 		expect(ErrorBody.parse(await again.json()).error.code).toBe("not_found");
+	});
+});
+
+describe("GET /api/v1/msc", () => {
+	it("returns today's class and records nothing", async () => {
+		const ctx = await context();
+		const res = await createRestApp().request("/api/v1/msc", {}, ctx);
+		expect(res.status).toBe(200);
+		const body = MscClassResult.parse(await res.json());
+		expect(body.index).toBe(((body.n % 63) + 63) % 63);
+		expect(body.heading).toBe(`MSC ${body.code} · ${body.title}`);
 	});
 });
 

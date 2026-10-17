@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/server";
+import { mscClass } from "../core/msc";
 import type { ApiContext } from "./context";
 import { toErrorBody } from "./errors";
 import { enforceRateLimit } from "./ratelimit";
@@ -21,7 +22,16 @@ export const CLAIM_FIRST_NOTE =
 	" Do not call this before choosing a topic: choose first and let claim_topic answer, " +
 	"so a repeat is counted instead of quietly avoided.";
 
+export const MSC_CLASS_DESCRIPTION =
+	"Today's MSC2020 top-level class in the fixed rotation of all 63 classes. " +
+	"N is the number of days from 2000-01-01 to today's date in America/New_York, and the class is entry N mod 63. " +
+	"Call this before choosing a math topic, and do not compute the index yourself. Records nothing. " +
+	"Then pick one specific named theorem, object, construction or result that genuinely belongs to that class " +
+	"(prefer something less famous than the obvious headline result), show `heading` under the section, " +
+	'and claim_topic with category "math" before writing.';
+
 export const MCP_TOOL_NAMES = [
+	"msc_class",
 	"claim_topic",
 	"check_topic",
 	"list_topics",
@@ -53,6 +63,17 @@ async function run(action: () => Promise<Record<string, unknown>>): Promise<Tool
 
 export function buildMcpServer(api: ApiContext): McpServer {
 	const server = new McpServer({ name: "topic-ledger", version: MCP_SERVER_VERSION });
+
+	server.registerTool(
+		"msc_class",
+		{
+			title: "Today's MSC class",
+			description: MSC_CLASS_DESCRIPTION,
+			inputSchema: {},
+			annotations: { readOnlyHint: true },
+		},
+		async () => run(async () => ({ ...mscClass(new Date()) })),
+	);
 
 	server.registerTool(
 		"claim_topic",
